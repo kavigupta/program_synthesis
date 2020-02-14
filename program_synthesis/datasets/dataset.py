@@ -1,5 +1,5 @@
 import argparse
-import cPickle as pickle
+import pickle
 import collections
 import gzip
 import json
@@ -13,9 +13,9 @@ import numpy as np
 import torch.utils.data
 
 import data
-import executor
-import stats
-from karel.mutation import KarelExampleMutator
+from . import executor
+from . import stats
+from .karel.mutation import KarelExampleMutator
 
 
 Schema = collections.namedtuple("Schema", ["args", "return_type"])
@@ -290,7 +290,7 @@ class DynamicDataset(object):
 
         self.candidate_shard.append(item)
         if len(self.candidate_shard) == DynamicDataset.SHARD_SIZE:
-            with gzip.open(os.path.join(self.path, str(self.next_shard)), 'w') as f:
+            with gzip.open(os.path.join(self.path, str(self.next_shard)), 'wb') as f:
                 pickle.dump(self.candidate_shard, f, pickle.HIGHEST_PROTOCOL)
             self.shard_items_count += DynamicDataset.SHARD_SIZE
             self.shard_sizes.append(DynamicDataset.SHARD_SIZE)
@@ -401,7 +401,7 @@ class KarelTorchDataset(torch.utils.data.Dataset):
 
         self.file = None
         self.index = []
-        with open(self.filename + '.index') as index_file:
+        with open(self.filename + '.index', "rb") as index_file:
             while True:
                 offset = index_file.read(8)
                 if not offset:
@@ -414,9 +414,9 @@ class KarelTorchDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if self.file is None:
-            self.file = open(self.filename)
+            self.file = open(self.filename, "rb")
         self.file.seek(self.index[idx])
-        return self.mutator(KarelExample.from_dict(pickle.load(self.file)))
+        return self.mutator(KarelExample.from_dict(pickle.load(self.file, encoding='latin1')))
 
 
 class KarelDataset(object):
@@ -424,7 +424,7 @@ class KarelDataset(object):
     def __init__(self, filename, batch_size, mutator=lambda x: x):
         self.filename = filename
         self.batch_size = batch_size
-        self.file = open(self.filename)
+        self.file = open(self.filename, "rb")
         self.mutator = mutator
 
     def __iter__(self):
@@ -585,7 +585,7 @@ def dataset_split(args, dataset, filenames, proportions):
         total = sum(lst)
         return [float(x) / total for x in lst]
     datastats = [stats.DatasetStats(args) for _ in filenames]
-    files = [open(filename, 'w') for filename in filenames]
+    files = [open(filename, 'wb') for filename in filenames]
     real_proportions = [x for x in proportions]
     candidates = range(len(proportions))
     expected_size = [len(dataset.data) * p for p in proportions]

@@ -164,7 +164,7 @@ class KarelForSynthesisParser(Parser):
         except KeyError as e:
             raise KarelSyntaxError('Unknown token: {}'.format(e))
         tokens.append(None)
-        return iter(tokens).next
+        return iter(tokens).__next__
 
     #########
     # parser

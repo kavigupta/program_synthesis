@@ -6,7 +6,7 @@ import struct
 import numpy as np
 
 from ..dataset import executor
-import parser_for_synthesis
+from . import parser_for_synthesis
 
 # Tree structure
 # - run: body
@@ -167,7 +167,7 @@ def mutate(tree, probs=None, rng=None):
         wrap_block_choices /= np.sum(wrap_block_choices)
         body = all_bodies[rng.choice(
             len(all_bodies), p=wrap_block_choices)]
-        bounds = list(itertools.combinations(xrange(len(body) + 1), 2))
+        bounds = list(itertools.combinations(range(len(body) + 1), 2))
         left, right = bounds[rng.choice(len(bounds))]
         subseq = body[left:right]
         del body[left:right]
@@ -178,7 +178,7 @@ def mutate(tree, probs=None, rng=None):
         wrap_ifelse_choices /= np.sum(wrap_ifelse_choices)
         body = all_bodies[rng.choice(
             len(all_bodies), p=wrap_ifelse_choices)]
-        bounds = list(itertools.combinations(xrange(len(body) + 1), 3))
+        bounds = list(itertools.combinations(range(len(body) + 1), 3))
         left, mid, right = bounds[rng.choice(len(bounds))]
         if_body = body[left:mid]
         else_body = body[mid:right]
