@@ -113,5 +113,7 @@ ENV/
 .idea/
 
 # Data files
+program_synthesis/datasets/karel/_parsetab.py
+program_synthesis/data
 *.pkl
 *.pkl.index

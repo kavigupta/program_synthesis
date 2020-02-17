@@ -86,7 +86,7 @@ def lists_to_packed_sequence(
     idx = 0
     for i, bound in enumerate(batch_bounds):
         for batch_idx, lst  in enumerate(sorted_lists[:bound]):
-            item_to_tensor(lst[i], batch_idx, result[idx])
+            item_to_tensor([int(x) if x is not None else x for x in lst[i]], batch_idx, result[idx])
             idx += 1
 
     result = Variable(result, volatile=volatile)

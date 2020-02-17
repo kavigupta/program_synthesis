@@ -864,7 +864,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         self.end_mask = torch.ByteTensor([
             [1] + [0] * (num_ops - 1),
             # <s>, </s>, keep, delete
-            np.concatenate(([1, 0, 1, 1],  self.increment_source_loc[4:]))
+            np.concatenate(([1, 0, 1, 1],  self.increment_source_loc[4:])).tolist()
         ])
         if self._cuda:
             self.end_mask = self.end_mask.cuda()

@@ -10,8 +10,6 @@ import os
 import sys
 import six
 
-from IPython.lib import pretty
-
 
 PAD_TOKEN = -1
 GO_TOKEN_STR = "<S>"

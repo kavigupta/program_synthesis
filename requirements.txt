@@ -1,0 +1,17 @@
+git+git://github.com/nearai/pytorch-tools@09dccb24960ebedfc6dc9f345069b9d3aa73edff
+#ipython
+# Workaround for https://github.com/numpy/numpy/issues/10474
+numpy==1.13
+ply
+#prompt_toolkit
+setuptools==38.5.1
+protobuf==3.4.0
+markdown==2.6.8
+pylru
+pyparsing
+werkzeug==0.14.1
+#futures==3.2.0
+tensorflow==1.5
+torch==0.3.1
+
+python-Levenshtein==0.12.0
