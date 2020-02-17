@@ -1035,7 +1035,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
             code_memory_indices = memory.code.raw_index(
                     orig_batch_idx=range(len(state.source_locs)),
                     seq_idx=new_source_locs)
-            code_memory = memory.code.ps.data[code_memory_indices]
+            code_memory = memory.code.ps.data[code_memory_indices.tolist()]
             code_memory = expand(code_memory, pairs_per_example)
         else:
             code_memory = None
