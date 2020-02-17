@@ -6,14 +6,13 @@ import torch
 
 
 class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
-                                                ['ps', 'lengths', 'sort_to_orig', 'orig_to_sort'])):
-
+        ['ps', 'lengths', 'sort_to_orig', 'orig_to_sort'])):
     def __new__(cls, ps, lengths, sort_to_orig, orig_to_sort):
         sort_to_orig = np.array(sort_to_orig)
         orig_to_sort = np.array(orig_to_sort)
-        self = super(PackedSequencePlus, cls).__new__(
-            cls, ps, lengths, sort_to_orig, orig_to_sort)
-        self.cum_batch_sizes = np.cumsum([0] + self.ps.batch_sizes.tolist()[:-1])
+        self = super(PackedSequencePlus, cls).__new__(cls,
+                ps, lengths, sort_to_orig, orig_to_sort)
+        self.cum_batch_sizes = np.cumsum([0] + self.ps.batch_sizes[:-1])
         return self
 
     def apply(self, fn):
@@ -25,13 +24,13 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
 
     def with_new_ps(self, ps):
         return PackedSequencePlus(ps, self.lengths, self.sort_to_orig,
-                                  self.orig_to_sort)
+                self.orig_to_sort)
 
     def pad(self, batch_first, others_to_unsort=(), padding_value=0.0):
         padded, seq_lengths = torch.nn.utils.rnn.pad_packed_sequence(
             self.ps, batch_first=batch_first, padding_value=padding_value)
-        results = padded[self.sort_to_orig, :], [seq_lengths[i]
-                                                 for i in self.sort_to_orig]
+        results = padded[
+            self.sort_to_orig], [seq_lengths[i] for i in self.sort_to_orig]
         return results + tuple(t[self.sort_to_orig] for t in others_to_unsort)
 
     def cuda(self, async=False):
@@ -41,17 +40,17 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
 
     def raw_index(self, orig_batch_idx, seq_idx):
         result = np.take(self.cum_batch_sizes, seq_idx) + np.take(
-            self.sort_to_orig, orig_batch_idx)
-        if self.ps.data is not None:
-            assert np.all(result < len(self.ps.data))
+                self.sort_to_orig, orig_batch_idx)
+        assert np.all(result < len(self.ps.data))
         return result
 
     def select(self, orig_batch_idx, seq_idx):
-        return self.ps.data[self.raw_index(orig_batch_idx, seq_idx)]
+        raw = self.raw_index(orig_batch_idx, seq_idx).tolist()
+        return self.ps.data[raw]
 
     def orig_index(self, raw_idx):
         seq_idx = np.searchsorted(
-            self.cum_batch_sizes, raw_idx, side='right') - 1
+                self.cum_batch_sizes, raw_idx, side='right') - 1
         batch_idx = raw_idx - self.cum_batch_sizes[seq_idx]
         orig_batch_idx = self.sort_to_orig[batch_idx]
         return orig_batch_idx, seq_idx
@@ -85,8 +84,8 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
             exp_i for i in self.orig_to_sort for exp_i in range(i * k, i * k + k)
         ]
         return PackedSequencePlus(
-            torch.nn.utils.rnn.PackedSequence(ps_data, batch_sizes),
-            lengths, sort_to_orig, orig_to_sort)
+                torch.nn.utils.rnn.PackedSequence(ps_data, batch_sizes),
+                lengths, sort_to_orig, orig_to_sort)
 
     def cpu(self):
         if not self.ps.data.is_cuda:
