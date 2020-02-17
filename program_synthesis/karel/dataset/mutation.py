@@ -196,31 +196,31 @@ def mutate(tree, probs=None, rng=None):
         body[i:i] = block.get('ifBody', [])
     elif choice == WRAP_BLOCK:
         wrap_block_choices /= np.sum(wrap_block_choices)
-        body = all_bodies[rng.choice(
-            len(all_bodies), p=wrap_block_choices)]
+        body = tree_index.all_bodies[rng.choice(
+            len(tree_index.all_bodies), p=wrap_block_choices)]
         bounds = list(itertools.combinations(range(len(body) + 1), 2))
         left, right = bounds[rng.choice(len(bounds))]
-        subseq = body[left:right]
-        del body[left:right]
+        subseq = body.elems[left:right]
+        del body.elems[left:right]
         new_block = random_singular_block(rng)
         new_block['body'] = subseq
-        body.insert(left, new_block)
+        body.elems.insert(left, new_block)
     elif choice == WRAP_IFELSE:
         wrap_ifelse_choices /= np.sum(wrap_ifelse_choices)
-        body = all_bodies[rng.choice(
-            len(all_bodies), p=wrap_ifelse_choices)]
+        body = tree_index.all_bodies[rng.choice(
+            len(tree_index.all_bodies), p=wrap_ifelse_choices)]
         bounds = list(itertools.combinations(range(len(body) + 1), 3))
         left, mid, right = bounds[rng.choice(len(bounds))]
-        if_body = body[left:mid]
-        else_body = body[mid:right]
-        del body[left:right]
+        if_body = body.elems[left:mid]
+        else_body = body.elems[mid:right]
+        del body.elems[left:right]
         new_block = {
             'type': 'ifElse',
             'cond': rng.choice(CONDS),
             'ifBody': if_body,
             'elseBody': else_body
         }
-        body.insert(left, new_block)
+        body.elems.insert(left, new_block)
     elif choice == REPLACE_COND:
         node = choose(rng, tree_index.cond_locs)
         if 'cond' in node:
@@ -277,7 +277,7 @@ class KarelExampleMutator(object):
         self.executor = executor.KarelExecutor(action_limit=250)
 
     def __call__(self, karel_example):
-        from ..dataset import KarelExample
+        from program_synthesis.karel.dataset.dataset import KarelExample
         assert karel_example.ref_example is None
         tree = self.parser.parse(karel_example.code_sequence)
         if self.rng_fixed:
