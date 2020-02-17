@@ -71,7 +71,8 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         return result
 
     def select(self, orig_batch_idx, seq_idx):
-        return self.ps.data[self.raw_index(orig_batch_idx, seq_idx)]
+        raw = self.raw_index(orig_batch_idx, seq_idx).tolist()
+        return self.ps.data[raw]
 
     def orig_index(self, raw_idx):
         seq_idx = np.searchsorted(
