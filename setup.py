@@ -24,6 +24,7 @@ setup(
         'ipython',
         'gym',
         'numpy',
+        'torch',
         'torchfold',
         'ply',
         'pylru',
