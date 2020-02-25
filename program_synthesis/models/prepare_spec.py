@@ -35,7 +35,7 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         orig_to_sort = np.array(orig_to_sort)
         self = super(PackedSequencePlus, cls).__new__(cls,
                 ps, lengths, sort_to_orig, orig_to_sort)
-        self.cum_batch_sizes = np.cumsum([0] + self.ps.batch_sizes[:-1])
+        self.cum_batch_sizes = np.cumsum([0] + list(self.ps.batch_sizes[:-1]))
         return self
 
     def apply(self, fn):
@@ -52,8 +52,10 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
     def pad(self, batch_first, others_to_unsort=(), padding_value=0.0):
         padded, seq_lengths = torch.nn.utils.rnn.pad_packed_sequence(
             self.ps, batch_first=batch_first, padding_value=padding_value)
-        results = padded[
-            self.sort_to_orig], [seq_lengths[i] for i in self.sort_to_orig]
+        indices = torch.from_numpy(self.sort_to_orig)
+        if self.ps.data.is_cuda:
+            indices = indices.cuda()
+        results = padded[indices], [seq_lengths[i] for i in self.sort_to_orig]
         return results + tuple(t[self.sort_to_orig] for t in others_to_unsort)
 
     def cuda(self, async=False):
