@@ -141,7 +141,7 @@ class KarelExecutor(object):
 
                 finished = False
                 if while_locs and while_counts:
-                    offending_span, count = max(while_counts.iteritems(),
+                    offending_span, count = max(while_counts.items(),
                                                 key=operator.itemgetter(1))
                     if count > 0 and offending_span in while_locs:
                         offending_loc = while_locs[offending_span]

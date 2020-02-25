@@ -50,6 +50,12 @@ def maybe_cuda(tensor, async=False):
     return tensor.cuda(async=async)
 
 
+def denumpify(item):
+    if type(item) in {tuple, list, np.ndarray}: # no isinstance to avoid named tuples
+        return [int(x) if np.issubdtype(type(x), np.integer) else x for x in item]
+    else:
+        return item
+
 def lists_to_packed_sequence(lists, item_shape, tensor_type, item_to_tensor):
     # TODO: deduplicate with the version in prepare_spec.
     result = tensor_type(sum(len(lst) for lst in lists), *item_shape)
@@ -60,7 +66,12 @@ def lists_to_packed_sequence(lists, item_shape, tensor_type, item_to_tensor):
     idx = 0
     for i, bound in enumerate(batch_bounds):
         for batch_idx, lst  in enumerate(sorted_lists[:bound]):
-            item_to_tensor([int(x) if x is not None else x for x in lst[i]], batch_idx, result[idx])
+            try:
+                item_to_tensor(denumpify(lst[i]), batch_idx, result[idx])
+            except:
+                print(lst[i])
+                print(type(lst[i]) == tuple)
+                1/0
             idx += 1
 
     result = Variable(result)
@@ -566,9 +577,9 @@ class KarelLGRLRefineBatchProcessor(object):
                     torch.LongTensor([
                         ev.span[0], ev.span[1],
                         ev.cond_span[0], ev.cond_span[1],
-                        int(ev.cond_value) if isinstance(ev.cond_value, bool)
-                        else ev.cond_value + 2,
-                        ev.success])))
+                        int(ev.cond_value) if isinstance(ev.cond_value, (bool, np.bool))
+                        else int(ev.cond_value + 2),
+                        int(ev.success)])))
         cond_code_indices = None
         if ref_code:
             cond_code_indices = Variable(torch.LongTensor(
