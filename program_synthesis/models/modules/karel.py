@@ -379,7 +379,7 @@ class TimeConvTraceEncoder(TraceEncoder):
         assert time % 2 == 1
         c = channels
         k = (time, 3, 3)
-        p = ((time - 1) / 2, 1, 1)
+        p = ((time - 1) // 2, 1, 1)
 
         # Feature maps:
         # 15 for current state
@@ -421,7 +421,7 @@ class TimeConvTraceEncoder(TraceEncoder):
 
         self.fc = nn.Linear(c * 18 * 18, out_dim)
 
-    def forward(self, code_enc, traces_grids, traces_events):
+    def forward(self, code_enc, traces_grids, traces_events, cag_interleave):
         if self.interleave_events:
             raise NotImplementedError
 
@@ -501,7 +501,7 @@ class RecurrentTraceEncoder(TraceEncoder):
 
         self.success_emb = nn.Embedding(2, 256)
         self.action_code_proj = nn.Linear(512, 256)
-        self.cond_code_proj = nn.Linear(512, 256 / 4)
+        self.cond_code_proj = nn.Linear(512, 256 // 4)
         # 2: false, true
         # 11: 0..10
         self.cond_emb = nn.Embedding(13, 256)
