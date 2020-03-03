@@ -324,6 +324,14 @@ class GridEncoder(nn.Module):
         out = self.grid_fc(out)
         return out
 
+class AugmentWithTrace(nn.Module):
+    def __init__(self):
+        self.grid_enc = GridEncoder(64)
+
+    def forward(self, inp_embed, traces, trace_events, program_lengths):
+        trace_embed = traces.apply(self.grid_enc)
+        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
+        return inp_embed.cat_with_list(all_sum_traces)
 
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
@@ -331,16 +339,24 @@ class CodeEncoder(nn.Module):
 
         self._cuda = args.cuda
         self.embed = nn.Embedding(vocab_size, 256)
+        if args.karel_trace_enc.startswith('aggregate'):
+            self.augment_with_trace = AugmentWithTrace()
+            output_embedding_size = 256 * 2
+        else:
+            self.augment_with_trace = lambda x, traces, trace_events, program_lengths: x
+            output_embedding_size = 256
+
         self.encoder = nn.LSTM(
-            input_size=256,
+            input_size=output_embedding_size,
             hidden_size=256,
             num_layers=2,
             bidirectional=True,
             batch_first=True)
 
-    def forward(self, inputs):
+    def forward(self, inputs, traces, trace_events):
         # inputs: PackedSequencePlus, batch size x sequence length
         inp_embed = inputs.apply(self.embed)
+        inp_embed = self.augment_with_trace(inp_embed, traces, trace_events, list(inputs.orig_lengths()))
         # output: PackedSequence, batch size x seq length x hidden (256 * 2)
         # state: 2 (layers) * 2 (directions) x batch x hidden size (256)
         output, state = self.encoder(inp_embed.ps,
@@ -351,6 +367,49 @@ class CodeEncoder(nn.Module):
                 inp_embed.with_new_ps(output),
                 state)
 
+def produce_sum_trace(trace_embed, trace_events, program_lengths):
+    all_sum_traces = []
+    for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
+        # traces_Per_program_token[i] == (trace indices, weights)
+        trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
+        weights = collections.defaultdict(list)
+        for test_idx, test in enumerate(item):
+            for trace_idx, (start, end), _ in test:
+                for i in range(start, end + 1):
+                    # assert trace_idx > 0
+                    trace_indices[i].append((test_idx, trace_idx - 1))
+                    weights[i].append(1 / (end + 1 - start))
+
+        sum_traces = []
+        for i in range(prog_len):
+            if not trace_indices[i]:
+                zeros = torch.zeros(trace_embed.ps.data.shape[-1])
+                if trace_embed.ps.data.is_cuda:
+                    zeros = zeros.cuda()
+                sum_traces.append(Variable(zeros))
+                continue
+            traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
+            weights_for_this = Variable(torch.FloatTensor(weights[i]))
+            if traces_for_token.is_cuda:
+                weights_for_this = weights_for_this.cuda()
+            sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
+
+        all_sum_traces.append(torch.stack(sum_traces, dim=0))
+    return all_sum_traces
+
+def trace_overall_index(batch_idx, test_time_indices):
+    """
+    Given
+        batch_idx: the particular program this all corresponds to
+        test_time_indices: list of which (tests, timestep) to select
+
+    Returns (trace_idxs, time_idxs)
+        trace_idxs: the indices int the traces to be returned
+        time_idxs: the indices into which timesteps should be returned
+    """
+    # this assumes 5 tests exactly
+    assert all(test < 5 for test, _ in test_time_indices)
+    return [batch_idx * 5 + test for test, _ in test_time_indices], [time for _, time in test_time_indices]
 
 class TraceEncoder(nn.Module):
     def __init__(self, interleave_events, include_flow_events,
@@ -1285,7 +1344,7 @@ class LGRLRefineKarel(nn.Module):
             self.trace_encoder = TimeConvTraceEncoder(self.args)
         elif self.args.karel_trace_enc.startswith('lstm'):
             self.trace_encoder = RecurrentTraceEncoder(self.args)
-        elif self.args.karel_trace_enc == 'none':
+        elif self.args.karel_trace_enc == 'none' or self.args.karel_trace_enc.startswith('aggregate'):
             self.trace_encoder = lambda *args: None
         else:
             raise ValueError(self.args.karel_trace_enc)
@@ -1311,7 +1370,7 @@ class LGRLRefineKarel(nn.Module):
         # batch size x num pairs x 512
         io_embed = self.encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
-        ref_code_memory = self.code_encoder(ref_code)
+        ref_code_memory = self.code_encoder(ref_code, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
         ref_trace_memory = self.trace_encoder(ref_code_memory, ref_trace_grids,
                                               ref_trace_events, cag_interleave)

@@ -375,7 +375,7 @@ class KarelLGRLRefineBatchProcessor(object):
         else:
             dec_data = None
 
-        if self.args.karel_trace_enc == 'aggregate':
+        if self.args.karel_trace_enc.startswith('aggregate'):
             ref_trace_grids = self.prepare_traces_grids(batch)
             ref_trace_events = self.get_spans(batch, ref_code)
             cag_interleave = None
