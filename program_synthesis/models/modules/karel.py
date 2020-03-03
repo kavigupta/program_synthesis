@@ -320,7 +320,6 @@ class GridEncoder(nn.Module):
         out = self.initial_conv(grids)
         for block in self.blocks:
             out = block(out)
-        print(out.shape, self.grid_fc)
         out = out.view(-1, self.channels * 18 * 18)
         out = self.grid_fc(out)
         return out
