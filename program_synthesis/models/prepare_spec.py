@@ -64,6 +64,8 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         return self.apply(lambda d: d.cuda(async=async))
 
     def raw_index(self, orig_batch_idx, seq_idx):
+        assert np.all(np.array(seq_idx) < len(self.cum_batch_sizes))
+        assert np.all(np.array(orig_batch_idx) < len(self.sort_to_orig))
         result = np.take(self.cum_batch_sizes, seq_idx) + np.take(
                 self.sort_to_orig, orig_batch_idx)
         assert np.all(result < len(self.ps.data))
