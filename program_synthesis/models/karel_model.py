@@ -334,6 +334,10 @@ class PackedTrace(collections.namedtuple('PackedTrace', ('actions',
                 cond_code_indices, self.interleave_indices)
 
 
+class Spans(collections.namedtuple('Spans', 'spans')):
+    def cuda(self, async=False):
+        return self
+
 class PackedDecoderData(collections.namedtuple('PackedDecoderData', ('input',
     'output', 'io_embed_indices', 'ref_code'))):
     def cuda(self, async=False):
@@ -371,7 +375,11 @@ class KarelLGRLRefineBatchProcessor(object):
         else:
             dec_data = None
 
-        if self.args.karel_trace_enc == 'none':
+        if self.args.karel_trace_enc == 'aggregate':
+            ref_trace_grids = self.prepare_traces_grids(batch)
+            ref_trace_events = self.get_spans(batch, ref_code)
+            cag_interleave = None
+        elif self.args.karel_trace_enc == 'none':
             ref_trace_grids, ref_trace_events = None, None
             cag_interleave = None
         else:
@@ -532,6 +540,18 @@ class KarelLGRLRefineBatchProcessor(object):
         ref_trace_grids = lists_to_packed_sequence(grids_lists, (15, 18, 18),
                 torch.FloatTensor, fill)
         return ref_trace_grids
+
+    def get_spans(self, batch, ref_code):
+        spans = []
+        for item in batch:
+            spans_for_item = []
+            for test in item.ref_example.input_tests:
+                spans_for_trace = []
+                for event in test['trace'].events:
+                    spans_for_trace.append((event.timestep, event.span, event.cond_span))
+                spans_for_item.append(spans_for_trace)
+            spans.append(spans_for_item)
+        return Spans(spans)
 
     def prepare_traces_events(self, batch, ref_code):
         # Split into action and cond events
