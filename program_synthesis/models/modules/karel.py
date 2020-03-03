@@ -326,6 +326,7 @@ class GridEncoder(nn.Module):
 
 class AugmentWithTrace(nn.Module):
     def __init__(self, grid_encoder_channels=64):
+        super().__init__()
         self.grid_enc = GridEncoder(grid_encoder_channels)
 
     def forward(self, inp_embed, traces, trace_events, program_lengths):
