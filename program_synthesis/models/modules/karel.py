@@ -297,6 +297,34 @@ class LGRLSeqDecoder(nn.Module):
     def init_state(self, *args):
         return lstm_init(self._cuda, 2, 256, *args)
 
+class GridEncoder(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.initial_conv = nn.Conv2d(
+            in_channels=15, out_channels=channels, kernel_size=3, padding=1)
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.BatchNorm2d(channels),
+                nn.ReLU(),
+                nn.Conv2d(
+                    in_channels=channels, out_channels=channels, kernel_size=3, padding=1),
+                nn.BatchNorm2d(channels),
+                nn.ReLU(),
+                nn.Conv2d(
+                    in_channels=channels, out_channels=channels, kernel_size=3, padding=1))
+            for _ in range(3)
+        ])
+        self.grid_fc = nn.Linear(channels * 18 * 18, 256)
+        self.channels = channels
+    def forward(self, grids):
+        out = self.initial_conv(grids)
+        for block in self.blocks:
+            out = block(out)
+        print(out.shape, self.grid_fc)
+        out = out.view(-1, self.channels * 18 * 18)
+        out = self.grid_fc(out)
+        return out
+
 
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
