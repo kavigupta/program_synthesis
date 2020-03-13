@@ -17,47 +17,66 @@ from . import parser_for_synthesis
 # - not: cond
 
 
+
 def masked_uniform(choices, i):
     prob = np.full(choices, 1. / (choices - 1))
     prob[i] = 0
     return prob
 
 
-conds = [{
+def choose(rng, sequence, p=None):
+    # Using rng.choice directly on sequence sometimes leads to undesirable
+    # effects, as that entails converting sequence into a numpy.ndarray.
+    return sequence[rng.choice(len(sequence), p=p)]
+
+
+CONDS = [{
     'type': t
 }
-         for t in ('frontIsClear', 'leftIsClear', 'rightIsClear',
-                   'markersPresent', 'noMarkersPresent')]
+    for t in ('frontIsClear', 'leftIsClear', 'rightIsClear',
+              'markersPresent', 'noMarkersPresent')]
 # no not for markersPresent and noMarkersPresent
-conds.extend({'type': 'not', 'cond': cond} for cond in conds[:3])
-conds_masked_probs = {
-    n: masked_uniform(len(conds), i)
-    for i, n in enumerate(
-        ('frontIsClear', 'leftIsClear', 'rightIsClear', 'markersPresent',
-         'noMarkersPresent', 'notfrontIsClear', 'notleftIsClear',
-         'notrightIsClear'))
+CONDS.extend({'type': 'not', 'cond': cond} for cond in CONDS[:3])
+CONDS_MASKED_PROBS = {
+    n: masked_uniform(len(CONDS), i)
+    for i, n in enumerate(('frontIsClear', 'leftIsClear', 'rightIsClear', 'markersPresent',
+                           'noMarkersPresent', 'notfrontIsClear', 'notleftIsClear',
+                           'notrightIsClear'))
 }
 
-action_names = ('move', 'turnLeft', 'turnRight', 'putMarker', 'pickMarker')
-actions_masked_probs = {
-    n: masked_uniform(len(action_names), i)
-    for i, n in enumerate(action_names)
+ACTION_NAMES = ('move', 'turnLeft', 'turnRight', 'putMarker', 'pickMarker')
+
+
+def get_action_name_id(action_name):
+    return ACTION_NAMES.index(action_name)
+
+
+ACTIONS_MASKED_PROBS = {
+    n: masked_uniform(len(ACTION_NAMES), i)
+    for i, n in enumerate(ACTION_NAMES)
 }
-actions = [{
+ACTIONS = [{
     'type': t
-} for t in ('move', 'turnLeft', 'turnRight', 'putMarker', 'pickMarker')]
+} for t in ACTION_NAMES]
+ACTIONS_DICT = dict(zip(ACTION_NAMES, ACTIONS))
 
-repeat_counts = [{'type': 'count', 'value': i} for i in range(2, 11)]
-repeat_masked_probs = [None, None] + [masked_uniform(len(repeat_counts), i) for
-        i in range(len(repeat_counts))]
+REPEAT_COUNTS = [{'type': 'count', 'value': i} for i in range(2, 11)]
+REPEAT_MASKED_PROBS = [None, None] + [masked_uniform(len(REPEAT_COUNTS), i) for
+                                      i in range(len(REPEAT_COUNTS))]
+
+BLOCK_TYPE = ['if', 'while', 'repeat']
+
+
+def get_block_type_id(block_type):
+    return BLOCK_TYPE.index(block_type)
 
 
 def random_singular_block(rng):
-    type_ = rng.choice(('if', 'while', 'repeat'))
+    type_ = rng.choice(BLOCK_TYPE)
     if type_ == 'repeat':
-        return {'type': type_, 'times': rng.choice(repeat_counts)}
+        return {'type': type_, 'times': rng.choice(REPEAT_COUNTS)}
     else:
-        return {'type': type_, 'cond': rng.choice(conds)}
+        return {'type': type_, 'cond': rng.choice(CONDS)}
 
 
 # operations:
@@ -74,10 +93,73 @@ WRAP_BLOCK = 4
 # - Wrap with ifElse
 WRAP_IFELSE = 5
 # - Change condition in if/ifElse/while
-REPLACE_COND = 6
+REPLACE_COND = 6  # Not implemented
 # - Switch between if/while
-SWITCH_IF_WHILE = 7
+SWITCH_IF_WHILE = 7  # Not implemented
+
+
+class Operation:
+    # TODO: Move operations into this class
+
+    @staticmethod
+    def total():  # Implemented operations
+        return 6
+
+
 DEFAULT_PROBS = np.array([1, 1, 1, 1, .25, .75, 1, 1], dtype=float)
+
+BodyInfo = collections.namedtuple('BodyInfo', ['node', 'type', 'elems'])
+
+
+class TreeIndex(object):
+    def __init__(self, tree):
+        self.action_locs = []
+        self.cond_locs = []
+        self.all_bodies = []
+        self.unwrappables = []
+        self.all_if_whiles = []
+
+        queue = collections.deque([(tree, (None, None))])
+        while queue:
+            node, address = queue.popleft()
+            if node['type'] == 'ifElse':
+                bodies = [BodyInfo(node, 'ifElse-if', node['ifBody']),
+                          BodyInfo(node, 'ifElse-else', node['elseBody'])]
+                self.unwrappables.append(address)
+            elif 'body' in node:
+                bodies = [BodyInfo(node, node['type'], node['body'])]
+                if address[0]:
+                    self.unwrappables.append(address)
+            else:
+                bodies = []
+                self.action_locs.append(address)
+            if 'cond' in node or 'times' in node:
+                self.cond_locs.append(node)
+            if node['type'] in ('if', 'while'):
+                self.all_if_whiles.append(node)
+
+            for body in bodies:
+                for i, child in enumerate(body.elems):
+                    queue.append((child, (body.elems, i)))
+            self.all_bodies.extend(bodies)
+
+        self.add_locs = [(body.elems, i)
+                         for body in self.all_bodies for i in range(
+                len(body) + 1)]
+        self.remove_locs = [x for x in self.action_locs if len(x[0]) > 1]
+
+    def count_actions(self):
+        # wrap_block_choices: (n + 1) choose 2 for each len(body)
+        # wrap_ifelse_choices: (n + 1) choose 3 for each len(body)
+        wrap_block_choices = np.array(
+            [len(body.elems) for body in self.all_bodies], dtype=float)
+        wrap_ifelse_choices = wrap_block_choices.copy()
+        wrap_block_choices *= (wrap_block_choices + 1)
+        wrap_block_choices /= 2
+        wrap_ifelse_choices *= (wrap_ifelse_choices + 1) * (
+                wrap_ifelse_choices - 1)
+        wrap_ifelse_choices /= 6
+
 
 def mutate(tree, probs=None, rng=None):
     if probs is None:
@@ -88,58 +170,27 @@ def mutate(tree, probs=None, rng=None):
     assert len(probs) == 8
     assert tree['type'] == 'run'
 
-    action_locs = []
-    cond_locs = []
-    all_bodies = []
-    unwrappables = []
-    all_if_whiles = []
-
-    queue = collections.deque([(tree, (None, None))])
-    while queue:
-        node, address = queue.popleft()
-        if node['type'] == 'ifElse':
-            bodies = [node['ifBody'], node['elseBody']]
-            unwrappables.append(address)
-        elif 'body' in node:
-            bodies = [node['body']]
-            if address[0]:
-                unwrappables.append(address)
-        else:
-            bodies = []
-            action_locs.append(address)
-        if 'cond' in node or 'times' in node:
-            cond_locs.append(node)
-        if node['type'] in ('if', 'while'):
-            all_if_whiles.append(node)
-
-        for body in bodies:
-            for i, child in enumerate(body):
-                queue.append((child, (body, i)))
-        all_bodies.extend(bodies)
-
-    bodies = None
-    add_locs = [(body, i) for body in all_bodies for i in range(len(body) + 1)]
-    remove_locs = [x for x in action_locs if len(x[0]) > 1]
+    tree_index = TreeIndex(tree)
 
     # wrap_block_choices: (n + 1) choose 2 for each len(body)
     # wrap_ifelse_choices: (n + 1) choose 3 for each len(body)
-    wrap_block_choices = np.array([len(body) for body in all_bodies],
-            dtype=float)
+    wrap_block_choices = np.array(
+        [len(body.elems) for body in tree_index.all_bodies], dtype=float)
     wrap_ifelse_choices = wrap_block_choices.copy()
     wrap_block_choices *= (wrap_block_choices + 1)
     wrap_block_choices /= 2
     wrap_ifelse_choices *= (wrap_ifelse_choices + 1) * (
-        wrap_ifelse_choices - 1)
+            wrap_ifelse_choices - 1)
     wrap_ifelse_choices /= 6
 
-    probs[ADD_ACTION] *= len(add_locs)
-    probs[REMOVE_ACTION] *= len(remove_locs)
-    probs[REPLACE_ACTION] *= len(action_locs)
-    probs[UNWRAP_BLOCK] *= len(unwrappables)
+    probs[ADD_ACTION] *= len(tree_index.add_locs)
+    probs[REMOVE_ACTION] *= len(tree_index.remove_locs)
+    probs[REPLACE_ACTION] *= len(tree_index.action_locs)
+    probs[UNWRAP_BLOCK] *= len(tree_index.unwrappables)
     probs[WRAP_BLOCK] *= sum(wrap_block_choices)
     probs[WRAP_IFELSE] *= sum(wrap_ifelse_choices)
-    probs[REPLACE_COND] *= len(cond_locs)
-    probs[SWITCH_IF_WHILE] *=  len(all_if_whiles)
+    probs[REPLACE_COND] *= len(tree_index.cond_locs)
+    probs[SWITCH_IF_WHILE] *= len(tree_index.all_if_whiles)
     probs_sum = np.sum(probs)
     if probs_sum == 0:
         raise Exception('No mutation possible')
@@ -147,17 +198,17 @@ def mutate(tree, probs=None, rng=None):
 
     choice = rng.choice(8, p=probs)
     if choice == ADD_ACTION:
-        body, i = add_locs[rng.choice(len(add_locs))]
-        body.insert(i, rng.choice(actions))
+        body, i = choose(rng, tree_index.add_locs)
+        body.insert(i, rng.choice(ACTIONS))
     elif choice == REMOVE_ACTION:
-        body, i = remove_locs[rng.choice(len(remove_locs))]
+        body, i = choose(rng, tree_index.remove_locs)
         del body[i]
     elif choice == REPLACE_ACTION:
-        body, i = action_locs[rng.choice(len(action_locs))]
-        body[i] = rng.choice(actions,
-                p=actions_masked_probs[body[i]['type']])
+        body, i = choose(rng, tree_index.action_locs)
+        body[i] = choose(rng, ACTIONS,
+                         p=ACTIONS_MASKED_PROBS[body[i]['type']])
     elif choice == UNWRAP_BLOCK:
-        body, i = unwrappables[rng.choice(len(unwrappables))]
+        body, i = choose(rng, tree_index.unwrappables)
         block = body[i]
         del body[i]
         body[i:i] = block.get('body', [])
@@ -165,10 +216,9 @@ def mutate(tree, probs=None, rng=None):
         body[i:i] = block.get('ifBody', [])
     elif choice == WRAP_BLOCK:
         wrap_block_choices /= np.sum(wrap_block_choices)
-        body = all_bodies[rng.choice(
-            len(all_bodies), p=wrap_block_choices)]
+        body = choose(rng, tree_index.all_bodies, p=wrap_block_choices).elems
         bounds = list(itertools.combinations(range(len(body) + 1), 2))
-        left, right = bounds[rng.choice(len(bounds))]
+        left, right = choose(rng, bounds)
         subseq = body[left:right]
         del body[left:right]
         new_block = random_singular_block(rng)
@@ -176,33 +226,32 @@ def mutate(tree, probs=None, rng=None):
         body.insert(left, new_block)
     elif choice == WRAP_IFELSE:
         wrap_ifelse_choices /= np.sum(wrap_ifelse_choices)
-        body = all_bodies[rng.choice(
-            len(all_bodies), p=wrap_ifelse_choices)]
+        body = choose(rng, tree_index.all_bodies, p=wrap_ifelse_choices).elems
         bounds = list(itertools.combinations(range(len(body) + 1), 3))
-        left, mid, right = bounds[rng.choice(len(bounds))]
+        left, mid, right = choose(rng, bounds)
         if_body = body[left:mid]
         else_body = body[mid:right]
         del body[left:right]
         new_block = {
             'type': 'ifElse',
-            'cond': rng.choice(conds),
+            'cond': rng.choice(CONDS),
             'ifBody': if_body,
             'elseBody': else_body
         }
         body.insert(left, new_block)
     elif choice == REPLACE_COND:
-        node = cond_locs[rng.choice(len(cond_locs))]
+        node = choose(rng, tree_index.cond_locs)
         if 'cond' in node:
             node['cond'] = rng.choice(
-                conds,
-                p=conds_masked_probs[node['cond']['type'] + node['cond'].get(
+                CONDS,
+                p=CONDS_MASKED_PROBS[node['cond']['type'] + node['cond'].get(
                     'cond', {}).get('type', '')])
         elif 'repeat' in node:
             node['repeat'] = rng.choice(
-                    repeat_counts,
-                    p=repeat_masked_probs[node['repeat']['times']['value']])
+                REPEAT_COUNTS,
+                p=REPEAT_MASKED_PROBS[node['repeat']['times']['value']])
     elif choice == SWITCH_IF_WHILE:
-        node = all_if_whiles[rng.choice(len(all_if_whiles))]
+        node = choose(rng, tree_index.all_if_whiles)
         node['type'] = {'if': 'while', 'while': 'if'}[node['type']]
 
     return tree
@@ -211,7 +260,7 @@ def mutate(tree, probs=None, rng=None):
 def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     if rng is None:
         rng = np.random.RandomState()
-    if count  == 1:
+    if count == 1:
         if allow_in_place:
             return mutate(tree, probs, rng)
         return mutate(copy.deepcopy(tree), probs, rng)
@@ -233,7 +282,6 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
 
 
 class KarelExampleMutator(object):
-
     def __init__(self, n_dist, rng_fixed, add_trace, probs=None):
         self.n_dist = n_dist / np.sum(n_dist)
         self.rng_fixed = rng_fixed
@@ -242,7 +290,7 @@ class KarelExampleMutator(object):
 
         self.rng = np.random.RandomState()
         self.parser = parser_for_synthesis.KarelForSynthesisParser(
-                build_tree=True)
+            build_tree=True)
         self.executor = executor.KarelExecutor(action_limit=250)
 
     def __call__(self, karel_example):
@@ -261,19 +309,32 @@ class KarelExampleMutator(object):
         if self.add_trace:
             for ex in karel_example.input_tests:
                 result = self.executor.execute(new_code, None, ex['input'],
-                        record_trace=True, strict=True)
+                                               record_trace=True, strict=True)
                 new_ex = dict(ex)
                 new_ex['trace'] = result.trace
                 new_tests.append(new_ex)
 
         karel_example.ref_example = KarelExample(
-                idx=None,
-                guid=None,
-                code_sequence=new_code,
-                input_tests=new_tests,
-                tests=karel_example.tests)
+            idx=None,
+            guid=None,
+            code_sequence=new_code,
+            input_tests=new_tests,
+            tests=karel_example.tests)
         return karel_example
 
+
+# Definition of Action Parameters
+
+Action = collections.namedtuple('Action', ['id', 'parameters'])
+
+ActionAddParameters = collections.namedtuple('ActionAddParameters', ['location', 'token'])
+ActionRemoveParameters = collections.namedtuple('ActionRemoveParameters', ['location'])
+ActionReplaceParameters = collections.namedtuple('ActionReplaceParameters', ['location', 'token'])
+ActionUnwrapBlockParameters = collections.namedtuple('ActionUnwrapBlockParameters', ['location'])
+ActionWrapBlockParameters = collections.namedtuple('ActionWrapBlockParameters',
+                                                   ['block_type', 'cond_id', 'start', 'end'])
+ActionWrapIfElseParameters = collections.namedtuple('ActionWrapIfElseParameters',
+                                                    ['cond_id', 'if_start', 'else_start', 'end'])
 
 # Obsolete notes
 # ==============
@@ -286,4 +347,3 @@ class KarelExampleMutator(object):
 #   if nots not allowed, then 100
 # - while: pick cond (8) and pick action (5) = 40
 # - repeat: pick times (9: 2..10) and body (5)
-

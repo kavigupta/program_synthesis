@@ -18,7 +18,7 @@ class ArgsDict(dict):
             self[key] = value
         self.__dict__ = self
 
-
+#(*) TODO Make our sl model loadable in the rl context: task,code encoder + embedding loads
 def load_checkpoint(model, optimizer, model_dir, map_to_cpu=False, step=None):
     path = os.path.join(model_dir, 'checkpoint')
     if step is not None:

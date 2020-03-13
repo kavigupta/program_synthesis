@@ -1,5 +1,6 @@
 from __future__ import print_function
 import functools
+import six
 
 import ply.lex
 
@@ -164,6 +165,8 @@ class KarelForSynthesisParser(Parser):
         except KeyError as e:
             raise KarelSyntaxError('Unknown token: {}'.format(e))
         tokens.append(None)
+        if six.PY2:
+            return iter(tokens).next
         return iter(tokens).__next__
 
     #########
@@ -171,11 +174,11 @@ class KarelForSynthesisParser(Parser):
     #########
 
     def p_prog(self, p):
-        '''prog : DEF RUN M_LBRACE stmt M_RBRACE'''
+        '''prog : DEF RUN M_LBRACE stmt_or_empty M_RBRACE'''
         stmt = p[4]
-
         if self.build_tree:
-            prog = {'type': 'run', 'body':  stmt}
+            span = (p.lexpos(1), p.lexpos(5))
+            prog = {'type': 'run', 'body':  stmt, 'span': span}
         else:
             prog = stmt
 
@@ -193,6 +196,18 @@ class KarelForSynthesisParser(Parser):
         if self.build_tree and not isinstance(p[0], list):
             p[0] = [p[0]]
 
+    def p_stmt_or_empty(self, p):
+        '''stmt_or_empty : stmt
+                         | empty
+        '''
+        if p[1] is None:
+            if  self.build_tree:
+                p[0] = []
+            else:
+                p[0] = lambda: None
+        else:
+            p[0] = p[1]
+
     def p_stmt_stmt(self, p):
         '''stmt_stmt : stmt stmt
         '''
@@ -207,7 +222,7 @@ class KarelForSynthesisParser(Parser):
         p[0] = stmt_stmt
 
     def p_if(self, p):
-        '''if : IF C_LBRACE cond C_RBRACE I_LBRACE stmt I_RBRACE
+        '''if : IF C_LBRACE cond C_RBRACE I_LBRACE stmt_or_empty I_RBRACE
         '''
         cond, stmt = p[3], p[6]
         span = (p.lexpos(1), p.lexpos(7))
@@ -217,7 +232,7 @@ class KarelForSynthesisParser(Parser):
         self.cond_block_spans.append(span)
 
         if self.build_tree:
-            if_ = {'type': 'if', 'cond': cond, 'body': stmt}
+            if_ = {'type': 'if', 'cond': cond, 'body': stmt, 'span': span}
         else:
             cond_fn, cond_span = cond
             def if_():
@@ -229,7 +244,7 @@ class KarelForSynthesisParser(Parser):
         p[0] = if_
 
     def p_ifelse(self, p):
-        '''ifelse : IFELSE C_LBRACE cond C_RBRACE I_LBRACE stmt I_RBRACE ELSE E_LBRACE stmt E_RBRACE
+        '''ifelse : IFELSE C_LBRACE cond C_RBRACE I_LBRACE stmt_or_empty I_RBRACE ELSE E_LBRACE stmt_or_empty E_RBRACE
         '''
         cond, stmt1, stmt2 = p[3], p[6], p[10]
         span = (p.lexpos(1), p.lexpos(11))
@@ -244,6 +259,9 @@ class KarelForSynthesisParser(Parser):
                 'cond': cond,
                 'ifBody': stmt1,
                 'elseBody': stmt2,
+                'span': span,
+                'ifSpan': true_span,
+                'elseSpan': false_span,
             }
         else:
             cond_fn, cond_span = cond
@@ -259,7 +277,7 @@ class KarelForSynthesisParser(Parser):
         p[0] = ifelse
 
     def p_while(self, p):
-        '''while : WHILE C_LBRACE cond C_RBRACE W_LBRACE stmt W_RBRACE
+        '''while : WHILE C_LBRACE cond C_RBRACE W_LBRACE stmt_or_empty W_RBRACE
         '''
         cond, stmt = p[3], p[6]
         span = (p.lexpos(1), p.lexpos(7))
@@ -273,6 +291,7 @@ class KarelForSynthesisParser(Parser):
                 'type': 'while',
                 'cond': cond,
                 'body': stmt,
+                'span': span,
             }
         else:
             cond_fn, cond_span = cond
@@ -287,19 +306,20 @@ class KarelForSynthesisParser(Parser):
         p[0] = while_
 
     def p_repeat(self, p):
-        '''repeat : REPEAT cste R_LBRACE stmt R_RBRACE
+        '''repeat : REPEAT cste R_LBRACE stmt_or_empty R_RBRACE
         '''
         cste, stmt = p[2], p[4]
+        span = (p.lexpos(1), p.lexpos(5))
 
         if self.build_tree:
             repeat = {
                 'type': 'repeat',
                 'times': cste,
                 'body': stmt,
+                'span': span,
             }
         else:
             limit = cste()
-            span = (p.lexpos(1), p.lexpos(5))
             true_span = (p.lexpos(3), p.lexpos(5))
             false_span = (p.lexpos(5), p.lexpos(5))
 
@@ -320,13 +340,14 @@ class KarelForSynthesisParser(Parser):
             p[0] = p[1]
             return
 
+        span = (p.lexpos(1), p.lexpos(4))
         if self.build_tree:
             fn = {
                 'type': 'not',
                 'cond': p[3],
+                'span': span,
             }
         else:
-            span = (p.lexpos(1), p.lexpos(4))
             cond_without_not, _ = p[3]
             fn = (lambda: not cond_without_not(), span)
 
@@ -340,12 +361,13 @@ class KarelForSynthesisParser(Parser):
                             | NO_MARKERS_PRESENT
         '''
         cond_without_not = p[1]
+        span = (p.lexpos(1), p.lexpos(1))
         if self.build_tree:
             cond = {
                 'type': cond_without_not,
+                'span': span,
             }
         else:
-            span = (p.lexpos(1), p.lexpos(1))
             cond = (getattr(self.karel, cond_without_not), span)
         p[0] = cond
 
@@ -357,30 +379,37 @@ class KarelForSynthesisParser(Parser):
                   | PUT_MARKER
         '''
         action_name = p[1]
+        span = (p.lexpos(1), p.lexpos(1))
+        self.action_spans.append(span)
+
         if self.build_tree:
-            action = {'type': action_name}
+            action = {'type': action_name, 'span': span}
         else:
             action = functools.partial(
                     getattr(self.karel, action_name),
-                    metadata=(p.lexpos(1), p.lexpos(1)))
+                    metadata=span)
         p[0] = action
 
     def p_cste(self, p):
         '''cste : INT
         '''
         value = p[1]
+        span = (p.lexpos(1), p.lexpos(1))
         if self.build_tree:
             fn = {
                 'type': 'count',
                 'value': value,
             }
         else:
-            span = (p.lexpos(1), p.lexpos(1))
             value = int(value)
             def fn():
                 return value
             fn.span = span
         p[0] = fn
+
+    def p_empty(self, p):
+        '''empty :'''
+        pass
 
     def p_error(self, p):
         if p:

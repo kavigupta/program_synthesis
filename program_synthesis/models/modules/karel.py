@@ -72,6 +72,18 @@ def lstm_init(cuda, num_layers, hidden_size, *batch_sizes):
 SequenceMemory = collections.namedtuple('SequenceMemory', ['mem', 'state'])
 
 
+def make_task_encoder(args):
+    if args.karel_io_enc == 'lgrl':
+        return LGRLTaskEncoder(args)
+    elif args.karel_io_enc == 'none':
+        return none_fn
+    else:
+        raise ValueError(args.karel_io_enc)
+
+def none_fn(*args, **kwargs):
+    return None
+
+
 class LGRLTaskEncoder(nn.Module):
     '''Implements the encoder from:
 
@@ -339,6 +351,7 @@ class CodeEncoder(nn.Module):
         super(CodeEncoder, self).__init__()
 
         self._cuda = args.cuda
+        # corresponds to self.token_embed
         self.embed = nn.Embedding(vocab_size, 256)
         if args.karel_trace_enc.startswith('aggregate'):
             self.augment_with_trace = AugmentWithTrace()
@@ -411,6 +424,127 @@ def trace_overall_index(batch_idx, test_time_indices):
     # this assumes 5 tests exactly
     assert all(test < 5 for test, _ in test_time_indices)
     return [batch_idx * 5 + test for test, _ in test_time_indices], [time for _, time in test_time_indices]
+
+
+
+class CodeEncoderAlternative(nn.Module):
+    def __init__(self, vocab_size, args):
+        super(CodeEncoderAlternative, self).__init__()
+        self._cuda = args.cuda
+        self.embed = nn.Embedding(vocab_size, 256)
+        self.encoder = nn.LSTM(input_size=256, hidden_size=256, num_layers=2, bidirectional=True, batch_first=True)
+
+    def get_embed(self, inputs):
+        inputs = inputs.type(torch.LongTensor)  # Make valid tensor for embeddings
+        inp_embed = self.embed(inputs)
+        return inp_embed
+
+    def forward(self, inputs):
+        inp_embed = self.get_embed(inputs)
+
+        inp_embed = inp_embed.permute((1, 0, 2))
+        seq, (output, _) = self.encoder(inp_embed,
+                                        lstm_init(self._cuda, 4, 256, inp_embed.shape[0]))
+
+        output = seq[-1]
+        return inp_embed, output
+
+
+class CodeEncoderRL(nn.Module):
+    """ Similar to CodeEncoderAlternative
+    """
+
+    def __init__(self, args):
+        super(CodeEncoderRL, self).__init__()
+        self._cuda = args.cuda
+        self.encoder = nn.LSTM(input_size=256, hidden_size=256, num_layers=2, bidirectional=True, batch_first=True)
+        self.token = nn.Linear(512, 512)
+
+    def forward(self, inp_embed: torch.Tensor):
+        """
+            Input:
+                `inp_embed` expected shape:
+                    (batch_size x seq_length x embed_size)
+
+            Output:
+                `seq` expected shape:
+                    (batch_size x seq_length x position_embed[256])
+
+                `output` expected shape:
+                    (batch_size x seq_length x position_embed[256])
+        """
+        seq, (output, _) = self.encoder(inp_embed,
+                                        lstm_init(self._cuda, 4, 256, inp_embed.shape[0]))
+        seq = F.relu(self.token(seq))
+        output = output[-1]
+        return seq, output
+
+
+class CodeUpdater(nn.Module):
+    def __init__(self, args):
+        super(CodeUpdater, self).__init__()
+        self._cuda = args.cuda
+        self.encoder = nn.LSTM(
+            input_size=512 + 512,
+            hidden_size=256,
+            num_layers=1,
+            bidirectional=True)
+
+        # self.zero_memory = Variable(torch.zeros(1, 256))
+        self.trace_gate = nn.Sequential(
+            nn.Linear(512 + 512, 512),
+            nn.Sigmoid())
+
+    def forward(self, code_memory, trace_memory, code_update_info):
+        # For each code position, find all of the times that the code has been
+        # referenced in the execution trace: action and cond events.
+        # - Scale each one by a sigmoid and then sum?
+        # - Run a separate RNN over each one?
+        #
+        # For each x_i, find t_i1, ..., t_ik.
+        # r_ik = sigmoid(W [x_i t_i1])
+        # x_i' = concat(x_i, sum_k (r_ik * t_ik))
+        # inputs: PackedSequencePlus, batch size x seq length x hidden (256 * 2)
+        #
+        # code_indices: indices of code tokens
+        # trace_indices: indices of trace events
+
+        selected_code_memory = code_memory.mem.ps.data[
+            code_update_info.code_indices]
+        selected_trace_memory = trace_memory.mem.ps.data[
+            code_update_info.trace_indices]
+
+        # Shape: num items x 512
+        trace_gates = self.trace_gate(torch.cat(
+            (selected_code_memory, selected_trace_memory), dim=1))
+        gated_trace_memory = trace_gates * selected_trace_memory
+
+        # max_trace_refs:
+        #   maximum number of times that some token is referenced in the trace
+        # code length x max trace refs x 256
+        code_trace_update = Variable(
+            torch.zeros(
+                code_memory.mem.ps.data.shape[0] *
+                code_update_info.max_trace_refs,
+                512,
+                out=torch.cuda.FloatTensor()
+                if self._cuda else torch.FloatTensor()))
+
+        code_trace_update.index_copy_(
+            0, code_update_info.code_trace_update_indices, gated_trace_memory)
+        # code length x 256
+        code_trace_update = code_trace_update.view(
+            code_memory.mem.ps.data.shape[0], code_update_info.max_trace_refs,
+            512).sum(dim=1)
+
+        updates, new_state = self.encoder(
+            code_memory.mem.apply(
+                lambda t: torch.cat([t, code_trace_update], dim=1)).ps)
+
+        code_memory = code_memory.mem.apply(lambda t: t + updates.data)
+        return utils.EncodedSequence(code_memory, new_state)
+
+
 
 class TraceEncoder(nn.Module):
     def __init__(self, interleave_events, include_flow_events,
@@ -1323,11 +1457,11 @@ class LGRLKarel(nn.Module):
         super(LGRLKarel, self).__init__()
         self.args = args
 
-        self.encoder = LGRLTaskEncoder(args)
+        self.task_encoder = LGRLTaskEncoder(args)
         self.decoder = LGRLSeqDecoder(vocab_size, args)
 
     def encode(self, input_grid, output_grid):
-        return self.encoder(input_grid, output_grid)
+        return self.task_encoder(input_grid, output_grid)
 
     def decode(self, io_embed, outputs):
         return self.decoder(io_embed, outputs)
@@ -1349,7 +1483,8 @@ class LGRLRefineKarel(nn.Module):
             self.trace_encoder = lambda *args: None
         else:
             raise ValueError(self.args.karel_trace_enc)
-
+        
+        # code_encoder = CodeEncoderRL
         if self.args.karel_code_enc == 'default':
             self.code_encoder = CodeEncoder(vocab_size, args)
         elif self.args.karel_code_enc == 'none':
@@ -1364,12 +1499,13 @@ class LGRLRefineKarel(nn.Module):
         else:
             raise ValueError(self.args.karel_refine_dec)
 
-        self.encoder = LGRLTaskEncoder(args)
+        # task_encoder
+        self.task_encoder = LGRLTaskEncoder(args)
 
     def encode(self, input_grid, output_grid, ref_code, ref_trace_grids,
                ref_trace_events, cag_interleave):
         # batch size x num pairs x 512
-        io_embed = self.encoder(input_grid, output_grid)
+        io_embed = self.task_encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
         ref_code_memory = self.code_encoder(ref_code, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
