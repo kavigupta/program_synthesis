@@ -145,6 +145,18 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         )
         return self.with_new_ps(cat_ps)
 
+    def cat_with_item(self, items):
+        """
+        Concatenate this sequnce with each item, where the item is spread across the sequence.
+
+        Works for all dimensions of data, it just needs to line up with the outputs correctly
+        """
+        assert len(items) == len(list(self.orig_lengths()))
+        return self.cat_with_list([
+            item.unsqueeze(0).repeat(length, *([1] * len(item.shape)))
+            for item, length in zip(items, self.orig_lengths())
+        ])
+
 
 
 def sort_lists_by_length(lists):
