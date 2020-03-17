@@ -469,7 +469,7 @@ def get_algolisp_dataset(args, _):
     return train_data, dev_data
 
 
-def get_karel_dataset(args, model):
+def get_karel_dataset(args, model, eval_on_train=False):
     suffix = args.dataset[5:]
 
     if args.karel_mutate_ref:
@@ -486,7 +486,7 @@ def get_karel_dataset(args, model):
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator),
         args.batch_size,
-        collate_fn=model.batch_processor(for_eval=False),
+        collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
         pin_memory=False)
     dev_data = torch.utils.data.DataLoader(
@@ -553,11 +553,11 @@ def set_vocab(args):
         raise ValueError("Unknown dataset %s" % args.dataset)
 
 
-def get_dataset(args, model):
+def get_dataset(args, model, eval_on_train=False):
     if args.dataset == 'algolisp':
         return get_algolisp_dataset(args, model)
     elif args.dataset.startswith('karel'):
-        return get_karel_dataset(args, model)
+        return get_karel_dataset(args, model, eval_on_train=eval_on_train)
     else:
         raise ValueError("Unknown dataset %s" % args.dataset)
 
