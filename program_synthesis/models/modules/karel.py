@@ -1523,12 +1523,12 @@ class LGRLRefineKarel(nn.Module):
             raise ValueError(self.args.karel_refine_dec)
 
         # task_encoder
-        self.task_encoder = LGRLTaskEncoder(args)
+        self.encoder = LGRLTaskEncoder(args)
 
     def encode(self, input_grid, output_grid, ref_code, ref_trace_grids,
                ref_trace_events, cag_interleave):
         # batch size x num pairs x 512
-        io_embed = self.task_encoder(input_grid, output_grid)
+        io_embed = self.encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
         ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
