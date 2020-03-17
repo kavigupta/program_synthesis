@@ -341,7 +341,7 @@ class AugmentWithTrace(nn.Module):
         super().__init__()
         self.grid_enc = GridEncoder(grid_encoder_channels)
 
-    def forward(self, inp_embed, traces, trace_events, program_lengths):
+    def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
         trace_embed = traces.apply(self.grid_enc)
         all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
@@ -382,10 +382,10 @@ class CodeEncoder(nn.Module):
             bidirectional=True,
             batch_first=True)
 
-    def forward(self, inputs, traces, trace_events):
+    def forward(self, inputs, input_grid, output_grid, traces, trace_events):
         # inputs: PackedSequencePlus, batch size x sequence length
         inp_embed = inputs.apply(self.embed)
-        inp_embed = self.augment_with_trace(inp_embed, traces, trace_events, list(inputs.orig_lengths()))
+        inp_embed = self.augment_with_trace(inp_embed, input_grid, output_grid, traces, trace_events, list(inputs.orig_lengths()))
         # output: PackedSequence, batch size x seq length x hidden (256 * 2)
         # state: 2 (layers) * 2 (directions) x batch x hidden size (256)
         output, state = self.encoder(inp_embed.ps,
@@ -1522,7 +1522,7 @@ class LGRLRefineKarel(nn.Module):
         # batch size x num pairs x 512
         io_embed = self.task_encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
-        ref_code_memory = self.code_encoder(ref_code, ref_trace_grids, ref_trace_events)
+        ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
         ref_trace_memory = self.trace_encoder(ref_code_memory, ref_trace_grids,
                                               ref_trace_events, cag_interleave)
