@@ -122,12 +122,10 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
     def cat_with_list(self, other):
         """
         Concatenate this and the given list of sequences. These must have identical shapes and lengths for each item
-
-        Currently only works for 1d data
         """
         assert list(self.orig_lengths()) == [x.shape[0] for x in other], "lengths of sequences do not match"
-        assert all(len(x.shape) == 2 for x in other), "input data is not 1d"
         assert len({x.shape[1:] for x in other}) == 1, "input data's embedding dimension is non-homogenous"
+        assert other[0].shape[2:] == self.ps.data.shape[2:], "should match at indices other than 1"
 
         new_data = Variable(torch.zeros([self.ps.data.shape[0], *other[0].shape[1:]]))
         if self.ps.data.is_cuda:
@@ -138,7 +136,7 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
             if self.ps.data.is_cuda:
                 indices = indices.cuda()
 
-            new_data.scatter_(0, indices.unsqueeze(-1).repeat(1, new_data.shape[-1]), tens)
+            new_data[indices] = tens
 
         cat_data = torch.cat([new_data, self.ps.data], dim=1)
         cat_ps = torch.nn.utils.rnn.PackedSequence(
