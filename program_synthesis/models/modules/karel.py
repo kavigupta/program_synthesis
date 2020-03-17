@@ -310,10 +310,10 @@ class LGRLSeqDecoder(nn.Module):
         return lstm_init(self._cuda, 2, 256, *args)
 
 class GridEncoder(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, num_grids, channels):
         super().__init__()
         self.initial_conv = nn.Conv2d(
-            in_channels=15, out_channels=channels, kernel_size=3, padding=1)
+            in_channels=num_grids * 15, out_channels=channels, kernel_size=3, padding=1)
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.BatchNorm2d(channels),
@@ -337,11 +337,19 @@ class GridEncoder(nn.Module):
         return out
 
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64):
+    def __init__(self, grid_encoder_channels=64, conv_all_grids=False):
+        """
+        grid_encoder_channels: the number of channels to use in the conv
+        conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
+        """
         super().__init__()
-        self.grid_enc = GridEncoder(grid_encoder_channels)
+        self.conv_all_grids = conv_all_grids
+        self.grid_enc = GridEncoder(3 if self.conv_all_grids else 1, grid_encoder_channels)
 
     def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
+        if self.conv_all_grids:
+            concat_grids = torch.cat(list(torch.cat([input_grid, output_grid], dim=2)), dim=0)
+            traces = traces.cat_with_item(concat_grids)
         trace_embed = traces.apply(self.grid_enc)
         all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
