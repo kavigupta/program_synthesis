@@ -346,6 +346,18 @@ class AugmentWithTrace(nn.Module):
         all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
 
+    @property
+    def output_embedding_size(self):
+        return 256 + 256
+
+class DoNotAugmentWithTrace(nn.Module):
+    def forward(self, inp_embed, *args, **kwargs):
+        return inp_embed
+
+    @property
+    def output_embedding_size(self):
+        return 256
+
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
         super(CodeEncoder, self).__init__()
@@ -354,14 +366,17 @@ class CodeEncoder(nn.Module):
         # corresponds to self.token_embed
         self.embed = nn.Embedding(vocab_size, 256)
         if args.karel_trace_enc.startswith('aggregate'):
-            self.augment_with_trace = AugmentWithTrace()
-            output_embedding_size = 256 * 2
+            if ":" in args.karel_trace_enc:
+                index = args.karel_trace_enc.index(":")
+                kwargs = eval("dict({})".format(args.karel_trace_enc[index + 1:]))
+            else:
+                kwargs = {}
+            self.augment_with_trace = AugmentWithTrace(**kwargs)
         else:
-            self.augment_with_trace = lambda x, traces, trace_events, program_lengths: x
-            output_embedding_size = 256
+            self.augment_with_trace = DoNotAugmentWithTrace()
 
         self.encoder = nn.LSTM(
-            input_size=output_embedding_size,
+            input_size=self.augment_with_trace.output_embedding_size,
             hidden_size=256,
             num_layers=2,
             bidirectional=True,
