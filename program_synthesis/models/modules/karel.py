@@ -337,8 +337,30 @@ class GridEncoder(nn.Module):
         out = self.grid_fc(out)
         return out
 
+class TraceLSTM(nn.Module):
+    def __init__(self, input_dimension, num_layers):
+        super().__init__()
+        self.input_dimension = input_dimension
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(
+            input_size=input_dimension,
+            hidden_size=input_dimension,
+            num_layers=num_layers,
+            bidirectional=True,
+            batch_first=True)
+        self.fc = nn.Linear(input_dimension * 2, input_dimension)
+
+    def forward(self, traces):
+        output, _ = self.lstm(traces.ps,
+                                     lstm_init(traces.ps.data.is_cuda, self.num_layers * 2, self.input_dimension,
+                                               traces.ps.batch_sizes[0]))
+        result = traces.with_new_ps(output)
+        result = result.apply(self.fc)
+        return result
+
+
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64, conv_all_grids=False):
+    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2):
         """
         grid_encoder_channels: the number of channels to use in the conv
         conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
@@ -346,12 +368,18 @@ class AugmentWithTrace(nn.Module):
         super().__init__()
         self.conv_all_grids = conv_all_grids
         self.grid_enc = GridEncoder(3 if self.conv_all_grids else 1, grid_encoder_channels)
+        if rnn_trace:
+            self.trace_lstm = TraceLSTM(input_dimension=self.grid_enc.output_size, num_layers=rnn_trace_layers)
+        else:
+            self.trace_lstm = lambda x: x
+
 
     def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
         if self.conv_all_grids:
             concat_grids = torch.cat(list(torch.cat([input_grid, output_grid], dim=2)), dim=0)
             traces = traces.cat_with_item(concat_grids)
         trace_embed = traces.apply(self.grid_enc)
+        trace_embed = self.trace_lstm(trace_embed)
         all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
 
