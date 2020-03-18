@@ -310,8 +310,9 @@ class LGRLSeqDecoder(nn.Module):
         return lstm_init(self._cuda, 2, 256, *args)
 
 class GridEncoder(nn.Module):
-    def __init__(self, num_grids, channels):
+    def __init__(self, num_grids, channels, output_size=256):
         super().__init__()
+        self.output_size = output_size
         self.initial_conv = nn.Conv2d(
             in_channels=num_grids * 15, out_channels=channels, kernel_size=3, padding=1)
         self.blocks = nn.ModuleList([
@@ -326,7 +327,7 @@ class GridEncoder(nn.Module):
                     in_channels=channels, out_channels=channels, kernel_size=3, padding=1))
             for _ in range(3)
         ])
-        self.grid_fc = nn.Linear(channels * 18 * 18, 256)
+        self.grid_fc = nn.Linear(channels * 18 * 18, self.output_size)
         self.channels = channels
     def forward(self, grids):
         out = self.initial_conv(grids)
@@ -356,7 +357,7 @@ class AugmentWithTrace(nn.Module):
 
     @property
     def output_embedding_size(self):
-        return 256 + 256
+        return 256 + self.grid_enc.output_size
 
 class DoNotAugmentWithTrace(nn.Module):
     def forward(self, inp_embed, *args, **kwargs):
