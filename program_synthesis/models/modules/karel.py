@@ -366,6 +366,9 @@ class DoNotAugmentWithTrace(nn.Module):
     def output_embedding_size(self):
         return 256
 
+def construct_augment_with_trace(strategy=AugmentWithTrace, **kwargs):
+    return strategy(**kwargs)
+
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
         super(CodeEncoder, self).__init__()
@@ -379,7 +382,7 @@ class CodeEncoder(nn.Module):
                 kwargs = eval("dict({})".format(args.karel_trace_enc[index + 1:]))
             else:
                 kwargs = {}
-            self.augment_with_trace = AugmentWithTrace(**kwargs)
+            self.augment_with_trace = construct_augment_with_trace(**kwargs)
         else:
             self.augment_with_trace = DoNotAugmentWithTrace()
 
