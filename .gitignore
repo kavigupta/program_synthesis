@@ -5,6 +5,10 @@ data/naps
 
 program_synthesis/karel/dataset/_parsetab.py
 
+# Logdirs
+
+logdirs
+
 # Mac artifacts
 .DS_Store
 
@@ -19,6 +23,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 env/
+env3/
 build/
 develop-eggs/
 dist/

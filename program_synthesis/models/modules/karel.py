@@ -310,10 +310,11 @@ class LGRLSeqDecoder(nn.Module):
         return lstm_init(self._cuda, 2, 256, *args)
 
 class GridEncoder(nn.Module):
-    def __init__(self, channels):
+    def __init__(self, num_grids, channels, output_size=256):
         super().__init__()
+        self.output_size = output_size
         self.initial_conv = nn.Conv2d(
-            in_channels=15, out_channels=channels, kernel_size=3, padding=1)
+            in_channels=num_grids * 15, out_channels=channels, kernel_size=3, padding=1)
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.BatchNorm2d(channels),
@@ -326,7 +327,7 @@ class GridEncoder(nn.Module):
                     in_channels=channels, out_channels=channels, kernel_size=3, padding=1))
             for _ in range(3)
         ])
-        self.grid_fc = nn.Linear(channels * 18 * 18, 256)
+        self.grid_fc = nn.Linear(channels * 18 * 18, self.output_size)
         self.channels = channels
     def forward(self, grids):
         out = self.initial_conv(grids)
@@ -336,15 +337,66 @@ class GridEncoder(nn.Module):
         out = self.grid_fc(out)
         return out
 
-class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64):
+class TraceLSTM(nn.Module):
+    def __init__(self, input_dimension, num_layers):
         super().__init__()
-        self.grid_enc = GridEncoder(grid_encoder_channels)
+        self.input_dimension = input_dimension
+        self.num_layers = num_layers
+        self.lstm = nn.LSTM(
+            input_size=input_dimension,
+            hidden_size=input_dimension,
+            num_layers=num_layers,
+            bidirectional=True,
+            batch_first=True)
+        self.fc = nn.Linear(input_dimension * 2, input_dimension)
 
-    def forward(self, inp_embed, traces, trace_events, program_lengths):
+    def forward(self, traces):
+        output, _ = self.lstm(traces.ps,
+                                     lstm_init(traces.ps.data.is_cuda, self.num_layers * 2, self.input_dimension,
+                                               traces.ps.batch_sizes[0]))
+        result = traces.with_new_ps(output)
+        result = result.apply(self.fc)
+        return result
+
+
+class AugmentWithTrace(nn.Module):
+    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2):
+        """
+        grid_encoder_channels: the number of channels to use in the conv
+        conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
+        """
+        super().__init__()
+        self.conv_all_grids = conv_all_grids
+        self.grid_enc = GridEncoder(3 if self.conv_all_grids else 1, grid_encoder_channels)
+        if rnn_trace:
+            self.trace_lstm = TraceLSTM(input_dimension=self.grid_enc.output_size, num_layers=rnn_trace_layers)
+        else:
+            self.trace_lstm = lambda x: x
+
+
+    def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
+        if self.conv_all_grids:
+            concat_grids = torch.cat(list(torch.cat([input_grid, output_grid], dim=2)), dim=0)
+            traces = traces.cat_with_item(concat_grids)
         trace_embed = traces.apply(self.grid_enc)
+        trace_embed = self.trace_lstm(trace_embed)
         all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
+
+    @property
+    def output_embedding_size(self):
+        return 256 + self.grid_enc.output_size
+
+class DoNotAugmentWithTrace(nn.Module):
+    def forward(self, inp_embed, *args, **kwargs):
+        return inp_embed
+
+    @property
+    def output_embedding_size(self):
+        return 256
+
+def construct_augment_with_trace(strategy=AugmentWithTrace, **kwargs):
+    return strategy(**kwargs)
 
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
@@ -354,23 +406,26 @@ class CodeEncoder(nn.Module):
         # corresponds to self.token_embed
         self.embed = nn.Embedding(vocab_size, 256)
         if args.karel_trace_enc.startswith('aggregate'):
-            self.augment_with_trace = AugmentWithTrace()
-            output_embedding_size = 256 * 2
+            if ":" in args.karel_trace_enc:
+                index = args.karel_trace_enc.index(":")
+                kwargs = eval("dict({})".format(args.karel_trace_enc[index + 1:]))
+            else:
+                kwargs = {}
+            self.augment_with_trace = construct_augment_with_trace(**kwargs)
         else:
-            self.augment_with_trace = lambda x, traces, trace_events, program_lengths: x
-            output_embedding_size = 256
+            self.augment_with_trace = DoNotAugmentWithTrace()
 
         self.encoder = nn.LSTM(
-            input_size=output_embedding_size,
+            input_size=self.augment_with_trace.output_embedding_size,
             hidden_size=256,
             num_layers=2,
             bidirectional=True,
             batch_first=True)
 
-    def forward(self, inputs, traces, trace_events):
+    def forward(self, inputs, input_grid, output_grid, traces, trace_events):
         # inputs: PackedSequencePlus, batch size x sequence length
         inp_embed = inputs.apply(self.embed)
-        inp_embed = self.augment_with_trace(inp_embed, traces, trace_events, list(inputs.orig_lengths()))
+        inp_embed = self.augment_with_trace(inp_embed, input_grid, output_grid, traces, trace_events, list(inputs.orig_lengths()))
         # output: PackedSequence, batch size x seq length x hidden (256 * 2)
         # state: 2 (layers) * 2 (directions) x batch x hidden size (256)
         output, state = self.encoder(inp_embed.ps,
@@ -1524,14 +1579,14 @@ class LGRLRefineKarel(nn.Module):
             raise ValueError(self.args.karel_refine_dec)
 
         # task_encoder
-        self.task_encoder = LGRLTaskEncoder(args)
+        self.encoder = LGRLTaskEncoder(args)
 
     def encode(self, input_grid, output_grid, ref_code, ref_trace_grids,
                ref_trace_events, cag_interleave):
         # batch size x num pairs x 512
-        io_embed = self.task_encoder(input_grid, output_grid)
+        io_embed = self.encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
-        ref_code_memory = self.code_encoder(ref_code, ref_trace_grids, ref_trace_events)
+        ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
         ref_trace_memory = self.trace_encoder(ref_code_memory, ref_trace_grids,
                                               ref_trace_events, cag_interleave)

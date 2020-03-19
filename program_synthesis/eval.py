@@ -25,7 +25,7 @@ def evaluate(args):
     if args.eval_final:
         eval_dataset = datasets.get_eval_final_dataset(args, m)
     elif args.eval_train:
-        eval_dataset, _ = datasets.get_dataset(args, m)
+        eval_dataset, _ = datasets.get_dataset(args, m, eval_on_train=True)
     else:
         eval_dataset = datasets.get_eval_dataset(args, m)
     if m.last_step == 0:
@@ -38,7 +38,8 @@ def evaluate(args):
     evaluation.run_eval(
         args.tag, eval_dataset, m.inference,
         current_executor.execute, not args.hide_example_info,
-        args.report_path)
+        args.report_path,
+        limit=args.limit)
 
 
 if __name__ == "__main__":
