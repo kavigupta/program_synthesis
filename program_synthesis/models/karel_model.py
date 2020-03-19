@@ -43,7 +43,6 @@ def encode_grids_and_outputs(batch, vocab):
         [item.code_sequence for item in batch], vocab.stoi, False)
     return input_grids, output_grids, code_seqs
 
-
 def maybe_cuda(tensor, async=False):
     if tensor is None:
         return None

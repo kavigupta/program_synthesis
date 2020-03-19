@@ -20,6 +20,14 @@ def lists_to_numpy(lsts, stoi, default_value):
             data[i, j] = stoi(element)
     return data
 
+def lists_to_numpy_novocab(lsts, default_value):
+    max_length = max(lengths(lsts))
+    data = np.full((len(lsts), max_length), default_value, dtype=np.int64)
+    for i, lst in enumerate(lsts):
+        for j, element in enumerate(lst):
+            data[i, j] = element
+    return data
+
 
 def numpy_to_tensor(arr, cuda, volatile):
     t = torch.LongTensor(arr)

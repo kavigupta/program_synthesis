@@ -514,6 +514,64 @@ class KarelRefineEnv(gym.Env):
         elif mode == 'ansi':
             return b_code
 
+class KarelSimpleEnv(KarelRefineEnv):
+
+    def __init__(self, input_tests, mutated_code, ground_truth_code, max_token=None):
+        self.input_tests = input_tests
+        self.mutated_code = mutated_code
+        self.ground_truth_code = ground_truth_code
+        self._max_token_allowed = max_token
+        self.reset(self.mutated_code)
+
+    def reset(self, code=None):
+        if code != None:
+            self.reset_with(code)
+        else:
+            self.reset_with(('DEF', 'run', 'm(', 'm)'))
+        obs, _ = self.compute_obs()
+        return obs
+    
+    def step(self, action):
+        if self._max_token_allowed is not None:
+            atree_copy = copy.deepcopy(self.action_space.atree)
+
+        # This line might reduce performance (it is useful while developing)
+        assert self.action_space.contains(action)
+
+        self.action_space.apply(action)
+
+        if self._max_token_allowed is not None and len(
+                self.atree.code) > self._max_token_allowed:  # Undo last action (max token exceeded)
+            # noinspection PyUnboundLocalVariable
+            self.action_space.atree = atree_copy
+
+        # Run new program on I/O grids to get observation
+        observation, done = self.compute_obs()
+
+        reward = self.compute_reward()
+        info = {}
+        return observation, reward, done, info
+
+    def compute_reward(self):
+        n = len(self.ground_truth_code)
+        m = len(self.atree.code)
+        reward = 0
+        for i in range(int(2+2*43)):
+            if ((i <= n) or (i <= m)):
+                token_true = self.ground_truth_code[i]
+                token_gen = self.atree.code[i]
+                if token_true == token_gen:
+                    reward += 1
+                if token_true != token_gen:
+                    reward -= 1
+            if ((i >= m) and (n >= m)):
+                reward -= 1
+            else:
+                reward -= 1
+        reward /= n
+
+        return reward
+
 
 def linearize_cond(node):
     if node['type'] == 'not':

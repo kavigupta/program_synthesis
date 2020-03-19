@@ -15,7 +15,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--dataset_filter_code_length', type=int, default=0)
     parser.add_argument('--dataset_bucket', action='store_true', default=False)
     parser.add_argument('--vocab_min_freq', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=4)#128
     parser.add_argument('--load-sync', action='store_true')
 
     parser.add_argument(
@@ -50,6 +50,13 @@ def get_arg_parser(title, mode):
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
+        train_group.add_argument('--max_rollout_length', type=int, default=1)
+        train_group.add_argument('--replay_buffer_size', type=int, default=16384)
+        train_group.add_argument('--erase_factor', type=float, default=0.01)
+        train_group.add_argument('--num_episodes', type=int, default=10)
+        train_group.add_argument('--num_training_steps', type=int, default=10)
+        train_group.add_argument('--update_actor_epoch', type=int, default=10)
+
         train_group.add_argument(
             '--reinforce-step', type=int, default=0,
             help='Step after which start to use reinforce')

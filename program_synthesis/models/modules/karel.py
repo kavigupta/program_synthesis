@@ -1089,7 +1089,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         assert not code_usage
         assert not (self.use_code_memory and self.use_code_attn)
 
-        num_ops = 4 + 2 * vocab_size
+        num_ops = 4 + 2 * vocab_size 
 
         self.op_embed = nn.Embedding(num_ops, 256)
         self.last_token_embed = nn.Embedding(vocab_size, 256)
@@ -1151,6 +1151,21 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         return LGRLRefineEditMemory(io_embed, code_memory, ref_code)
 
     def forward(self, io_embed, code_memory, _1, _2, dec_data):
+
+        dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
+        
+        if self.use_code_attn:
+            logits = torch.cat(dec_output, dim=0)
+            labels = dec_data.output.ps.data
+            return logits, labels
+        
+        else:
+            logits = self.out(dec_output)
+            labels = dec_data.output.ps.data
+
+        return logits, labels
+
+    def common_forward(self, io_embed, code_memory, _1, _2, dec_data):
         # io_embed: batch size x num pairs x 512
         # code_memory:
         #   PackedSequencePlus, batch size x code length x 512
@@ -1203,9 +1218,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                 offset += bs
                 last_bs = bs
 
-            logits = torch.cat(logits, dim=0)
-            labels = dec_data.output.ps.data
-            return logits, labels
+            return logits, dec_data
 
         io_embed_flat = io_embed.view(-1, *io_embed.shape[2:])
 
@@ -1228,10 +1241,21 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         dec_output, _ = dec_output.data.view(-1, pairs_per_example,
                 *dec_output.data.shape[1:]).max(dim=1)
 
-        logits = self.out(dec_output)
-        labels = dec_data.output.ps.data
+        return dec_output, dec_data
 
-        return logits, labels
+    def rl_forward(self, io_embed, code_memory, _1, _2, dec_data):
+        dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
+        
+        if self.use_code_attn:
+            logits = torch.cat(dec_output, dim=0)
+            labels = dec_data.output.ps.data
+            return logits, labels, None
+        
+        else:
+            logits = self.out(dec_output)
+            labels = dec_data.output.ps.data
+
+        return logits, labels, dec_output, list(dec_data.output.orig_lengths())#dec_data.output.lengths
 
     def decode_token(self, token, state, memory, attentions, batch_order=None,
             use_end_mask=True):
