@@ -5,6 +5,10 @@ data/naps
 
 program_synthesis/karel/dataset/_parsetab.py
 
+# Logdirs
+
+logdirs
+
 # Mac artifacts
 .DS_Store
 
