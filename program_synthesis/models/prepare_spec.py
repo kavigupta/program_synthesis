@@ -153,8 +153,8 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
 
         cat_data = torch.cat([new_data, self.ps.data], dim=1)
         cat_ps = torch.nn.utils.rnn.PackedSequence(
-            data=cat_data,
-            batch_sizes=self.ps.batch_sizes
+            cat_data,
+            self.ps.batch_sizes
         )
         return self.with_new_ps(cat_ps)
 
