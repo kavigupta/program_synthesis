@@ -121,8 +121,6 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         ]
 
         batch_sizes = torch.tensor(batch_sizes, dtype=torch.long)
-        if ps_data.is_cuda:
-            batch_sizes = batch_sizes.cuda()
         return PackedSequencePlus(
                 torch.nn.utils.rnn.PackedSequence(ps_data, batch_sizes),
                 lengths, sort_to_orig, orig_to_sort)
@@ -312,8 +310,6 @@ def lists_to_packed_sequence(lists, stoi, cuda, volatile):
     v = numpy_to_tensor(lists_to_numpy(lists_sorted, stoi, 0), cuda, volatile)
     lens = lengths(lists_sorted)
     lens = torch.tensor(lens, dtype=torch.long)
-    if v.is_cuda:
-        lens = lens.cuda()
     return PackedSequencePlus(
         torch.nn.utils.rnn.pack_padded_sequence(
             v, lens, batch_first=True),

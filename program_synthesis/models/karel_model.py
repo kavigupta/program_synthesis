@@ -75,8 +75,6 @@ def lists_to_packed_sequence(lists, item_shape, tensor_type, item_to_tensor):
 
     result = Variable(result)
     batch_bounds = torch.tensor(batch_bounds, dtype=torch.long)
-    if result.is_cuda:
-        batch_bounds = batch_bounds.cuda()
 
     return prepare_spec.PackedSequencePlus(
             nn.utils.rnn.PackedSequence(result, batch_bounds),
