@@ -227,6 +227,8 @@ class KarelLGRLRefineModel(BaseKarelModel):
             data.load_vocab(args.word_vocab), self.args.num_placeholders)
         self.model = karel.LGRLRefineKarel(
             len(self.vocab) - self.args.num_placeholders, args)
+        if args.cuda:
+            self.model = self.model.cuda()
         self.executor = executor.get_executor(args)()
 
         self.trace_grid_lengths = []
@@ -475,6 +477,84 @@ class KarelLGRLRefineBatchProcessor(object):
 
             # Op = </s>, emb location and last token are irrelevant
             edit_list.append((1, None, None))
+            edit_lists.append(edit_list)
+
+        rnn_inputs = lists_to_packed_sequence(
+                [lst[:-1] for lst in edit_lists], (3,), torch.LongTensor,
+                lambda op_emb_pos_last_token, _, out:
+                out.copy_(torch.LongTensor([*op_emb_pos_last_token])))
+        rnn_outputs = lists_to_packed_sequence(
+                [lst[1:] for lst in edit_lists], (1,), torch.LongTensor,
+                lambda op_emb_pos_last_token, _, out:
+                out.copy_(torch.LongTensor([op_emb_pos_last_token[0]])))
+
+        io_embed_indices = torch.LongTensor([
+            expanded_idx
+            for b in rnn_inputs.ps.batch_sizes
+            for orig_idx in rnn_inputs.orig_to_sort[:b]
+            for expanded_idx in range(orig_idx * 5, orig_idx * 5 + 5)
+        ])
+
+        return PackedDecoderData(rnn_inputs, rnn_outputs, io_embed_indices,
+                ref_code)
+
+    def compute_edit_ops_no_char(self, batch, code_seqs, ref_code):
+
+        edit_lists = []
+        for batch_idx, item in enumerate(zip(batch,code_seqs)):
+            code_sequence = item[1].numpy()
+            code_sequence = list(np.array(item[1])*(np.array(item[1])>0))
+            ref_example_code_sequence = list(np.array(item[0])*(np.array(item[0])>0))
+            edit_ops =  list(
+                    edit.compute_edit_ops_no_stoi(ref_example_code_sequence,
+                        code_sequence))
+            dest_iter = itertools.chain(code_sequence)
+
+            # Op = <s>, emb location, last token = <s>
+            source_locs, ops, values = [list(x) for x in zip(*edit_ops)]
+            #source_locs.append(len(ref_example_code_sequence))
+            #ops = [0] + ops
+            #values = [None] + values
+
+            edit_list = []
+            op_idx = 0
+            for source_loc, op, value in zip(source_locs, ops, values):
+                if op == 'keep':
+                    op_idx = 2
+                elif op == 'delete':
+                    op_idx = 3
+                elif op == 'insert':
+                    op_idx = 4 + 2 * self.vocab.stoi(value)
+                elif op == 'replace':
+                    op_idx = 5 + 2 * self.vocab.stoi(value)
+                elif isinstance(op, int):
+                    op_idx = op
+                else:
+                    raise ValueError(op)
+
+                # Set last token to UNK if operation is delete
+                # XXX last_token should be 0 (<s>) at the beginning
+                try:
+                    if op_idx == 3:
+                        last_token = 2
+                    else:
+                        last_token = next(dest_iter)
+                except StopIteration:
+                    raise Exception('dest_iter ended early')
+
+                assert source_loc < ref_code.lengths[ref_code.sort_to_orig[batch_idx]]
+                edit_list.append((
+                    op_idx, ref_code.raw_index(batch_idx, source_loc),
+                    last_token))
+            stopped = False
+            try:
+                next(dest_iter)
+            except StopIteration:
+                stopped = True
+            assert stopped
+
+            # Op = </s>, emb location and last token are irrelevant
+            #edit_list.append((1, None, None))
             edit_lists.append(edit_list)
 
         rnn_inputs = lists_to_packed_sequence(

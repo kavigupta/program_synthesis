@@ -31,7 +31,7 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--eval_n_steps', type=int, default=50)
         train_group.add_argument('--log_interval', type=int, default=100)#20
         train_group.add_argument('--optimizer', type=str, default='sgd') #adam
-        train_group.add_argument('--lr', type=float, default=1) #.001
+        train_group.add_argument('--lr', type=float, default=3e-4) #.001
         train_group.add_argument('--lr_decay_steps', type=int, default=100000)
         train_group.add_argument('--lr_decay_rate', type=float, default = 0.5)
         train_group.add_argument('--gradient-clip', type=float)
@@ -53,8 +53,8 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--max_rollout_length', type=int, default=1)
         train_group.add_argument('--replay_buffer_size', type=int, default=16384)
         train_group.add_argument('--erase_factor', type=float, default=0.01)
-        train_group.add_argument('--num_episodes', type=int, default=10)
-        train_group.add_argument('--num_training_steps', type=int, default=10)
+        train_group.add_argument('--num_episodes', type=int, default=2)
+        train_group.add_argument('--num_training_steps', type=int, default=2)
         train_group.add_argument('--update_actor_epoch', type=int, default=10)
 
         train_group.add_argument(

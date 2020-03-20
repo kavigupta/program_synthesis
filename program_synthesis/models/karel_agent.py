@@ -2,6 +2,7 @@ import collections
 import copy
 
 import numpy as np
+import operator
 
 import torch
 import torch.nn as nn
@@ -21,6 +22,7 @@ from .modules import karel, attention
 # Alternatively have 2 more: remove token, add token where add token is treated in a second selection
 
 DISCOUNT = 0.9
+lmbda = 0.95
 EPISLON = 0.1
 ALPHA = 0.7
 
@@ -34,13 +36,16 @@ class KarelEditEnv(object):
         self.vocab = data.PlaceholderVocab(
             data.load_vocab(dataset.relpath('../data/karel/word.vocab')), 0)
 
-        self.dataset_loader = dataset.get_karel_dataset_nomodel(args, karel_model.KarelLGRLRefineBatchProcessor(args, self.vocab, False))
+        self.refiner = karel_model.KarelLGRLRefineBatchProcessor(args, self.vocab, False)
+        self.dataset_loader = dataset.get_karel_dataset_nomodel(args, self.refiner)
 
         self.data_iter = self.dataset_loader.__iter__()
         self._cur_env = None
+        self._cuda = args.cuda
 
     def reset(self):
-        example = self.data_iter.next()  
+        example = self.data_iter.next()
+ 
         return example
 
     def prepare_tasks(self, tasks):
@@ -204,7 +209,17 @@ class KarelEditPolicy(nn.Module):
         input_grids, output_grids, code_seqs, \
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
-        
+
+        if self.args.cuda:
+            input_grids = input_grids.cuda(async=True)
+            output_grids = output_grids.cuda(async=True)
+            code_seqs = karel_model.maybe_cuda(code_seqs, async=True)
+            dec_data = karel_model.maybe_cuda(dec_data, async=True)
+            ref_code = karel_model.maybe_cuda(ref_code, async=True)
+            ref_trace_grids = karel_model.maybe_cuda(ref_trace_grids, async=True)
+            ref_trace_events = karel_model.maybe_cuda(ref_trace_events, async=True)
+
+
         io_embed = self.encode(input_grids, output_grids)
         # code_seq = ground thruth code, ref_code.ps.data = edited
 
@@ -227,9 +242,9 @@ class KarelAgent(object):
         self.model = KarelEditPolicy(30, args)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
-        self.critic = nn.Linear(256, 1, bias=False)
+        self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
 
-    def select_action(self, state, epsilon_greedy ):
+    def select_action(self, state, return_true_code=False ):
         #return (mutation.ADD_ACTION, (3, 'move'))
         #if epsilon_greedy is not None and np.random.random() < epsilon_greedy:
         #    return np.random.randint(state.size)
@@ -237,10 +252,11 @@ class KarelAgent(object):
         # probs: probability we assign each possible operation in sequence
         # orig_code: the code we try to recover
         # dec_output: output of decoder lstm + list of sequence sizes
-        labels, probs, orig_code, values, lengths = self.best_action_value(state)
+        labels, probs, orig_code, values, lengths = self.best_action_value(state, return_true_code)
+
         return (labels, probs, orig_code, values, lengths)
 
-    def best_action_value(self, states ):
+    def best_action_value(self, states, return_true_code):
         #input_grids, output_grids = tasks
         #task_state = tasks #self.model.encode(input_grids, output_grids)
         logits, labels, dec_output, lengths = self.model.action_value(states)
@@ -248,8 +264,10 @@ class KarelAgent(object):
         probs = nn.functional.softmax(logits,dim=1)
 
         values = self.critic(dec_output)
-
-        return labels, probs, states.code_seqs, values, lengths
+        if return_true_code:
+            return labels, probs, states.code_seqs, values, lengths
+        else:
+            return labels, probs, [], values, lengths
 
     def train(self, tasks, states, actions, targets):
         self.optimizer.zero_grad()
@@ -299,7 +317,7 @@ def rollout(env, agent, epsilon_greedy, max_rollout_length):
     success = False
     for _ in range(max_rollout_length):
         # And here when the code_encoder is used 
-        action = agent.select_action(state, eps )
+        action = agent.select_action(state, return_true_code=True )
         new_state, reward, done, _ = env.step(action)
         experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4]))
         if done:
@@ -343,66 +361,190 @@ class PolicyTrainer(object):
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
-        v = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(new_states, 0), False, False)
-        lens = list_length(new_states)
-        ref_code_new = prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(v, lens, batch_first=True),
-        lens,list(np.arange(len(new_states))),list(np.arange(len(new_states))))
-            
-        list_len = list_length(new_states)
 
-        ref_code.ps.data = new_states
-        
-        return (input_grids, output_grids, code_seqs, dec_data, ref_code, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
-        
+        lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
 
+        v = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(lists_sorted, 0), False, False)
+        lens = prepare_spec.lengths(lists_sorted)
+        ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
+                v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
+
+        ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
+
+        dec_data_new = self.env.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
+        
+        return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
+    
+    def batchify(self, values, action_log_probs, adv_targ, _, lengths):
+
+        start,end = 0,0
+        start_,end_ = 0,0
+        pi = []
+        v_prime = []
+        advantage = []
+        for i,j in (zip(_,lengths)):
+            end += i
+            end_ += j
+            v_prime.append(values[start:end].mean())
+            pi.append(action_log_probs[start:end].mean())
+            advantage.append(adv_targ[start_:end_].mean())
+            end += i
+            start_ += j
+        
+        pi = torch.stack(pi)
+        v_prime = torch.stack(v_prime)
+        advantage = torch.stack(advantage)
+
+        return pi, v_prime, advantage
+
+    def compute_return(self, reward, value_preds, lengths, use_gae=True):
+
+        masks = np.ones(len(reward)+1)
+        for length in lengths:
+            masks[length] = 0
+        masks[-1] = 0
+
+        if use_gae:
+            gae = reward[-1]-value_preds[-1]
+            returns = [torch.tensor(reward[-1], dtype=torch.float32)]
+            for step in reversed(range(len(reward)-1)):
+                delta = reward[step] + DISCOUNT * value_preds[
+                    step + 1] * masks[step +
+                                            1] - value_preds[step]
+                gae = delta + DISCOUNT * lmbda * gae
+                returns.append(gae + value_preds[step])
+        else:
+            returns[0] = 0
+            for step in reversed(range(len(reward))):
+                returns[step] = returns[step + 1] * \
+                    DISCOUNT * masks[step + 1] + rewards[step]
+
+        returns = torch.stack(returns)
+        return returns
+
+    def prepare_ppo_batch(self, lengths, old_action_log_probs_batch, value_preds_batch, returns):
+
+        prob_a = []
+        value_preds_batch_ = []
+        returns_ = []
+        s,e =0,0
+        for j in (lengths):
+            e+= j
+            prob_a.append(old_action_log_probs_batch[s:e].mean())
+            value_preds_batch_.append(value_preds_batch[s:e].mean())
+            returns_.append(returns[s:e].mean())
+            s += j
+        prob_a = torch.stack(prob_a)
+        value_preds_batch_ = torch.stack(value_preds_batch_)
+        returns_ = torch.stack(returns_)
+
+        return prob_a, value_preds_batch_, returns_
 
     def PPO_update(self, batch):
 
         clip_param = 0.2
-        state, old_action_log_probs_batch, reward, new_state, value, lengths = batch[0]
+        value_loss_coef = 0.5
+        max_grad_norm = 5
+
+
+        use_clipped_value_loss = True
+
+        state, old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[0]
+
+        old_action_log_probs_batch = torch.log(old_action_log_probs_batch)
+
+        actions = torch.argmax(old_action_log_probs_batch,dim=1)
+
+        old_action_log_probs_batch = torch.gather(old_action_log_probs_batch, dim=1, index=actions.view(-1,1))
+        #state_ = self.update_states(state, new_state)
+
+        # not reward, but return
+        returns = self.compute_return(reward,value_preds_batch.view(-1), lengths, use_gae=True)
+        advantages = torch.Tensor(returns) - value_preds_batch.view(-1)
+        adv_targ = (advantages - advantages.mean()) / (advantages.std() + 1e-5).detach()
+
+        prob_a, value_preds_batch_, returns_ = self.prepare_ppo_batch(lengths, old_action_log_probs_batch, value_preds_batch.view(-1), returns)
+
+        prob_a, value_preds_batch_, returns_ = prob_a.detach(), value_preds_batch_.detach(), returns_.detach()
+        value_loss_epoch = 0
+        action_loss_epoch = 0
+        dist_entropy_epoch = 0
 
         for e in range(self.args.num_training_steps):
-            advantages = torch.Tensor(reward) - value
-            adv_targ = (advantages - advantages.mean()) / (
-            advantages.std() + 1e-5)
+            
+            # sample new data?
 
-            value_loss_epoch = 0
-            action_loss_epoch = 0
-            dist_entropy_epoch = 0
+            #labels, probs, _, values, _ = self.actor_critic.select_action(state_,return_true_code=False)
 
-            state_ = self.update_states(state, new_state)
-
-            labels, probs, _, values, _ = self.actor_critic.select_action(state_,0)
+            # get value of states using current policy
+            labels, probs, _, values, _ = self.actor_critic.select_action(state,return_true_code=False)
 
             action_log_probs = torch.log(probs)
 
-            #values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
-            #    obs_batch, recurrent_hidden_states_batch, masks_batch,
-            #    actions_batch)
+            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
 
-            ratio = torch.exp(action_log_probs -
-                            old_action_log_probs_batch)
-            surr1 = ratio * adv_targ
+
+            # batchify
+            
+            pi_a, values, advantage = self.batchify(values, action_log_probs, adv_targ, _, lengths) 
+                
+
+            ratio = torch.exp(pi_a -
+                            prob_a)
+            surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1.0 - clip_param,
-                                1.0 + clip_param) * adv_targ
-            action_loss = -torch.min(surr1, surr2).mean()
-        return action_loss
+                                1.0 + clip_param) * advantage
+            action_loss = -torch.min(surr1, surr2).mean() 
+
+            if use_clipped_value_loss:
+                value_pred_clipped = value_preds_batch_ + \
+                    (values - value_preds_batch_).clamp(-clip_param, clip_param)
+                value_losses = (values - returns_).pow(2)
+                value_losses_clipped = (
+                    value_pred_clipped - returns_).pow(2)
+                value_loss = 0.5 * torch.max(value_losses,
+                                                value_losses_clipped).mean()
+            else:
+                value_loss = 0.5 * (returns_ - values).pow(2).mean()
+                
+
+            self.actor_critic.optimizer.zero_grad()
+            (value_loss * value_loss_coef + action_loss -
+                dist_entropy * entropy_coef).backward()
+            nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
+                                        max_grad_norm)
+            self.actor_critic.optimizer.step()
+
+            value_loss_epoch += value_loss.item()
+            action_loss_epoch += action_loss.item()
+
+        value_loss_epoch /= self.args.num_training_steps
+        action_loss_epoch /= self.args.num_training_steps
+
+        return (value_loss_epoch, action_loss_epoch)
 
 
     def train(self):
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size/self.args.batch_size), self.args.erase_factor)
         for epoch in range(self.args.num_epochs):
 
-            for _ in range(self.args.num_episodes):
+            for i in range(self.args.num_episodes):
                 _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
-                replay_buffer.add(experience)
-            
-            for _ in range(self.args.num_training_steps):
-                batch = replay_buffer.sample(1)
-                self.PPO_update(batch)
+                loss = self.PPO_update(experience)
+                print(i)
+                print('action loss {}'.format(loss[0]))
+                print('value loss {}'.format(loss[1]))
+                if i%1 ==0:
+                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, i, self.args.model_dir)
 
-            if (epoch + 1) % self.args.update_actor_epoch == 0:
-                self.actor_critic.update(self.critic)
+                #replay_buffer.add(experience)
+            
+            #for _ in range(self.args.num_training_steps):
+            #    batch = replay_buffer.sample(1)
+            #    self.PPO_update(batch)
+
+            #if (epoch + 1) % self.args.update_actor_epoch == 0:
+            #    self.actor_critic.update(self.critic)
                 # log info here
 
 
@@ -417,15 +559,11 @@ def main():
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
     args = parser.parse_args()
+    #torch.cuda.set_device(2)
     args.cuda = False #not args.no_cuda and torch.cuda.is_available()
     agent_cls = KarelAgent
     env = KarelEditEnv(args)
 
-    # experience = rollout(env, agent_cls(env, args), False, 1)
-    # for x in experience:
-    #     print(x)
-    # env.reset()
-    # print(env.step((mutation.ADD_ACTION, (3, 'move'))))
     trainer = PolicyTrainer(args, agent_cls, env)
     trainer.train()
 
