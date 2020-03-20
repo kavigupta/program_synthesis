@@ -1,7 +1,7 @@
 git+git://github.com/nearai/pytorch-tools@09dccb24960ebedfc6dc9f345069b9d3aa73edff
 #ipython
 # Workaround for https://github.com/numpy/numpy/issues/10474
-numpy==1.13.3
+numpy==1.18.2
 ply
 #prompt_toolkit
 setuptools==38.5.1
