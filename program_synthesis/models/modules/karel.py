@@ -1,4 +1,5 @@
 import collections
+import functools
 
 import torch
 import torch.nn as nn
@@ -10,6 +11,7 @@ from models import base, prepare_spec
 from .. import beam_search
 from datasets import data
 from .attention import SimpleSDPAttention
+from .gcn_conv import MultiGCNConv
 
 
 def default(value, if_none):
@@ -358,9 +360,88 @@ class TraceLSTM(nn.Module):
         result = result.apply(self.fc)
         return result
 
+def get_program_trace_edges(trace_events, program_itv, trace_itv):
+    edges = []
+    for batch_idx, item in enumerate(trace_events.spans):
+        # traces_Per_program_token[i] == (trace indices, weights)
+        for test_idx, test in enumerate(item):
+            for trace_idx, (start, end), _ in test:
+                for i in range(start, end + 1):
+                    # assert trace_idx > 0
+                    pi = program_itv[batch_idx, i]
+                    ti = trace_itv[batch_idx * 5 + test_idx, trace_idx - 1]
+                    edges.append((pi, ti))
+    return edges
+
+class TraceGraphConv(nn.Module):
+    def __init__(self, program_dim, grid_dim, layers):
+        super().__init__()
+        assert program_dim == grid_dim
+        self.dim = program_dim
+
+        self.multi_conv = MultiGCNConv(self.dim, layers)
+
+    def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
+
+        def flatten(embeddings):
+            flat_to_normal = [(i, j) for i, length in enumerate(embeddings.orig_lengths()) for j in range(length)]
+            normal_to_flat = {ij : f_i for f_i, ij in enumerate(flat_to_normal)}
+            batch_indices, seq_indices = zip(*flat_to_normal)
+            return embeddings.select(batch_indices, seq_indices), flat_to_normal, normal_to_flat
+
+        inp_flat, inp_ftn, inp_itv = flatten(inp_embed)
+        trace_flat, trace_ftn, trace_ntf = flatten(trace_embed)
+
+        vertices = torch.cat([inp_flat, trace_flat], dim=0)
+
+        trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
+
+        program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
+        edges = program_trace
+        edges += [(trace_itv[i, j], trace_itv[i, j + 1]) for i, length in enumerate(trace_embed.orig_lengths()) for j in range(length - 1)]
+        edges += [(inp_itv[i, j], inp_itv[i, j + 1]) for i, length in enumerate(inp_embed.orig_lengths()) for j in range(length - 1)]
+        edges += [(b, a) for a, b in edges] # make the graph symmetric
+        edges = torch.tensor(edges).T
+        if vertices.is_cuda:
+            edges = edges.cuda()
+
+        vertices = self.multi_conv(vertices, edges)
+
+        out_flat = torch.cat([inp_flat, vertices[:len(inp_ftn)]], dim=-1)
+
+        out_ps_data = torch.zeros(*inp_flat.shape[:-1], inp_flat.shape[-1] * 2)
+        if vertices.is_cuda:
+            out_ps_data = out_ps_data.cuda()
+        out_ps_data[inp_embed.raw_index(*zip(*inp_ftn))] = out_flat
+
+        return inp_embed.with_new_ps(
+            torch.nn.utils.rnn.PackedSequence(
+                out_ps_data,
+                inp_embed.ps.batch_sizes
+            )
+        )
+
+    @property
+    def output_embedding_size(self):
+        return self.dim * 2
+
+class SumTrace(nn.Module):
+    def __init__(self, program_dim, grid_dim):
+        super().__init__()
+        self.program_dim = program_dim
+        self.grid_dim = grid_dim
+
+    def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
+        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
+        return inp_embed.cat_with_list(all_sum_traces)
+
+    @property
+    def output_embedding_size(self):
+        return self.program_dim + self.grid_dim
+
 
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2):
+    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2, graph_conv=False, graph_conv_layers=2):
         """
         grid_encoder_channels: the number of channels to use in the conv
         conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
@@ -373,6 +454,12 @@ class AugmentWithTrace(nn.Module):
         else:
             self.trace_lstm = lambda x: x
 
+        if graph_conv:
+            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_layers)
+        else:
+            trace_incorporator_cls = SumTrace
+        self.trace_incorporator = trace_incorporator_cls(256, self.grid_enc.output_size)
+
 
     def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
         if self.conv_all_grids:
@@ -380,12 +467,11 @@ class AugmentWithTrace(nn.Module):
             traces = traces.cat_with_item(concat_grids)
         trace_embed = traces.apply(self.grid_enc)
         trace_embed = self.trace_lstm(trace_embed)
-        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
-        return inp_embed.cat_with_list(all_sum_traces)
+        return self.trace_incorporator(inp_embed, trace_embed, trace_events, program_lengths)
 
     @property
     def output_embedding_size(self):
-        return 256 + self.grid_enc.output_size
+        return self.trace_incorporator.output_embedding_size
 
 class DoNotAugmentWithTrace(nn.Module):
     def forward(self, inp_embed, *args, **kwargs):
