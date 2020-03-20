@@ -1230,7 +1230,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         assert not code_usage
         assert not (self.use_code_memory and self.use_code_attn)
 
-        num_ops = 4 + 2 * vocab_size 
+        num_ops = 4 + 2 * vocab_size
 
         self.op_embed = nn.Embedding(num_ops, 256)
         self.last_token_embed = nn.Embedding(vocab_size, 256)
@@ -1294,12 +1294,12 @@ class LGRLSeqRefineEditDecoder(nn.Module):
     def forward(self, io_embed, code_memory, _1, _2, dec_data):
 
         dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
-        
+
         if self.use_code_attn:
             logits = torch.cat(dec_output, dim=0)
             labels = dec_data.output.ps.data
             return logits, labels
-        
+
         else:
             logits = self.out(dec_output)
             labels = dec_data.output.ps.data
@@ -1386,12 +1386,12 @@ class LGRLSeqRefineEditDecoder(nn.Module):
 
     def rl_forward(self, io_embed, code_memory, _1, _2, dec_data):
         dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
-        
+
         if self.use_code_attn:
             logits = torch.cat(dec_output, dim=0)
             labels = dec_data.output.ps.data
             return logits, labels, None
-        
+
         else:
             logits = self.out(dec_output)
             labels = dec_data.output.ps.data
@@ -1648,7 +1648,7 @@ class LGRLRefineKarel(nn.Module):
             self.trace_encoder = lambda *args: None
         else:
             raise ValueError(self.args.karel_trace_enc)
-        
+
         # code_encoder = CodeEncoderRL
         if self.args.karel_code_enc == 'default':
             self.code_encoder = CodeEncoder(vocab_size, args)
