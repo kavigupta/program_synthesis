@@ -441,7 +441,7 @@ class SumTrace(nn.Module):
 
 
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2, graph_conv=False, graph_conv_layers=2):
+    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2, graph_conv_trace=False, graph_conv_trace_layers=2):
         """
         grid_encoder_channels: the number of channels to use in the conv
         conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
@@ -454,8 +454,8 @@ class AugmentWithTrace(nn.Module):
         else:
             self.trace_lstm = lambda x: x
 
-        if graph_conv:
-            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_layers)
+        if graph_conv_trace:
+            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers)
         else:
             trace_incorporator_cls = SumTrace
         self.trace_incorporator = trace_incorporator_cls(256, self.grid_enc.output_size)
