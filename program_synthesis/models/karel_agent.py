@@ -442,13 +442,7 @@ class PolicyTrainer(object):
 
     def PPO_update(self, batch):
 
-        clip_param = 0.2
-        value_loss_coef = 0.5
-        max_grad_norm = 5
-
-
-        use_clipped_value_loss = True
-
+        # Fetch rollout data
         state, old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[0]
 
         old_action_log_probs_batch = torch.log(old_action_log_probs_batch)
@@ -458,14 +452,14 @@ class PolicyTrainer(object):
         old_action_log_probs_batch = torch.gather(old_action_log_probs_batch, dim=1, index=actions.view(-1,1))
         #state_ = self.update_states(state, new_state)
 
-        # not reward, but return
+        # Compute advantage
         returns = self.compute_return(reward,value_preds_batch.view(-1), lengths, use_gae=True)
         advantages = torch.Tensor(returns) - value_preds_batch.view(-1)
-        adv_targ = (advantages - advantages.mean()) / (advantages.std() + 1e-5).detach()
+        adv_targ = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
 
+        # convert rollout to a batch
         prob_a, value_preds_batch_, returns_ = self.prepare_ppo_batch(lengths, old_action_log_probs_batch, value_preds_batch.view(-1), returns)
 
-        prob_a, value_preds_batch_, returns_ = prob_a.detach(), value_preds_batch_.detach(), returns_.detach()
         value_loss_epoch = 0
         action_loss_epoch = 0
         dist_entropy_epoch = 0
@@ -481,24 +475,30 @@ class PolicyTrainer(object):
 
             action_log_probs = torch.log(probs)
 
-            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
+            m = torch.distributions.Categorical(probs)
 
+            dist_entropy = m.entropy().mean()
+
+            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
 
             # batchify
             
             pi_a, values, advantage = self.batchify(values, action_log_probs, adv_targ, _, lengths) 
                 
+            # Action loss
 
             ratio = torch.exp(pi_a -
                             prob_a)
             surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1.0 - clip_param,
-                                1.0 + clip_param) * advantage
+            surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
+                                1.0 + self.args.clip_param) * advantage
             action_loss = -torch.min(surr1, surr2).mean() 
 
-            if use_clipped_value_loss:
+            # Value loss
+
+            if self.args.use_clipped_value_loss:
                 value_pred_clipped = value_preds_batch_ + \
-                    (values - value_preds_batch_).clamp(-clip_param, clip_param)
+                    (values - value_preds_batch_).clamp(-self.args.clip_param, self.args.clip_param)
                 value_losses = (values - returns_).pow(2)
                 value_losses_clipped = (
                     value_pred_clipped - returns_).pow(2)
@@ -507,21 +507,24 @@ class PolicyTrainer(object):
             else:
                 value_loss = 0.5 * (returns_ - values).pow(2).mean()
                 
+            # Total loss
 
             self.actor_critic.optimizer.zero_grad()
-            (value_loss * value_loss_coef + action_loss -
-                dist_entropy * entropy_coef).backward()
+            (value_loss * self.args.value_loss_coef + action_loss -
+                dist_entropy * self.args.entropy_coef).backward()
             nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
-                                        max_grad_norm)
+                                        self.args.max_grad_norm)
             self.actor_critic.optimizer.step()
 
             value_loss_epoch += value_loss.item()
             action_loss_epoch += action_loss.item()
+            dist_entropy_epoch += dist_entropy.item()
 
         value_loss_epoch /= self.args.num_training_steps
         action_loss_epoch /= self.args.num_training_steps
+        dist_entropy_epoch /= self.args.num_training_steps
 
-        return (value_loss_epoch, action_loss_epoch)
+        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch)
 
 
     def train(self):
@@ -529,13 +532,15 @@ class PolicyTrainer(object):
         for epoch in range(self.args.num_epochs):
 
             for i in range(self.args.num_episodes):
-                _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
+                with torch.no_grad():
+                    _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
                 loss = self.PPO_update(experience)
                 print(i)
                 print('action loss {}'.format(loss[0]))
                 print('value loss {}'.format(loss[1]))
-                if i%1 ==0:
-                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, i, self.args.model_dir)
+                print('entropy {}'.format(loss[2]))
+                if i%int(self.args.num_episodes/2) ==0:
+                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int((epoch+1)*i), self.args.model_dir)
 
                 #replay_buffer.add(experience)
             
