@@ -45,7 +45,14 @@ class BeamSearchState(object):
 BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs'])
 
 
-def beam_search(batch_size,
+def beam_search(*args, volatile=True, **kwargs):
+    if volatile:
+        with torch.no_grad():
+            return beam_search_(*args, **kwargs)
+    else:
+        return beam_search_(*args, **kwargs)
+
+def beam_search_(batch_size,
                 enc,
                 masked_memory,
                 decode_fn,
@@ -53,15 +60,14 @@ def beam_search(batch_size,
                 cuda=False,
                 max_decoder_length=MAX_DECODER_LENGTH,
                 return_attention=False,
-                return_beam_search_result=False,
-                volatile=True):
+                return_beam_search_result=False):
     # enc: batch size x hidden size
     # memory: batch size x sequence length x hidden size
     tt = torch.cuda if cuda else torch
     prev_tokens = Variable(tt.LongTensor(
-        batch_size).fill_(0), volatile=volatile)
+        batch_size).fill_(0))
     prev_probs = Variable(tt.FloatTensor(
-        batch_size, 1).fill_(0), volatile=volatile)
+        batch_size, 1).fill_(0))
     prev_hidden = enc
     finished = [[] for _ in range(batch_size)]
     result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0)
@@ -71,7 +77,7 @@ def beam_search(batch_size,
     # where b is the batch size, and each group of numbers has as many elements
     # as the beam size.
     b_idx = Variable(
-        torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1), volatile=volatile)
+        torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1))
 
     prev_masked_memory = masked_memory.expand_by_beam(beam_size)
 

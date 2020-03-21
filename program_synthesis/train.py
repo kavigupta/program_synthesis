@@ -91,6 +91,6 @@ if __name__ == "__main__":
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
     args = parser.parse_args()
-    args.cuda = False #not args.no_cuda and torch.cuda.is_available()
+    args.cuda = not args.no_cuda and torch.cuda.is_available()
 
     train(args)

@@ -97,7 +97,7 @@ class BaseModel(object):
             self.debug(batch)
         if self.last_step % self.save_every_n == 0:
             self.saver.save(self.model_dir, self.last_step)
-        return {'loss': loss.data[0]}
+        return {'loss': loss.data.item()}
 
     def eval(self, batch):
         results = self.inference(batch)
