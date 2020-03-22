@@ -122,3 +122,6 @@ program_synthesis/datasets/karel/_parsetab.py
 program_synthesis/data
 *.pkl
 *.pkl.index
+
+# saved models
+program_synthesis/tools/models/*

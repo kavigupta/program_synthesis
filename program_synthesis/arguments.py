@@ -15,7 +15,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--dataset_filter_code_length', type=int, default=0)
     parser.add_argument('--dataset_bucket', action='store_true', default=False)
     parser.add_argument('--vocab_min_freq', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=4)#128
+    parser.add_argument('--batch_size', type=int, default=64)#128
     parser.add_argument('--load-sync', action='store_true')
 
     parser.add_argument(
@@ -30,13 +30,13 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--eval_every_n', type=int, default=10000000)#1000
         train_group.add_argument('--eval_n_steps', type=int, default=50)
         train_group.add_argument('--log_interval', type=int, default=100)#20
-        train_group.add_argument('--optimizer', type=str, default='sgd') #adam
+        train_group.add_argument('--optimizer', type=str, default='adam') #adam
         train_group.add_argument('--lr', type=float, default=3e-4) #.001
         train_group.add_argument('--lr_decay_steps', type=int, default=100000)
-        train_group.add_argument('--lr_decay_rate', type=float, default = 0.5)
+        train_group.add_argument('--lr_decay_rate', type=float, default = None) #0.5
         train_group.add_argument('--gradient-clip', type=float)
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
-        train_group.add_argument('--num_epochs', type=int, default=50)
+        train_group.add_argument('--num_epochs', type=int, default=5)
         train_group.add_argument('--num_units', type=int, default=100)
         train_group.add_argument('--num_placeholders', type=int, default=0)#100
         train_group.add_argument('--num-att-heads', type=int, default=8)

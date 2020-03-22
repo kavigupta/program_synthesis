@@ -407,7 +407,7 @@ class PolicyTrainer(object):
 
         if use_gae:
             gae = reward[-1]-value_preds[-1]
-            returns = [torch.tensor(reward[-1], dtype=torch.float32).cuda() if not self.args.no_cuda else torch.tensor(reward[-1], dtype=torch.float32)]
+            returns = [torch.tensor(reward[-1], dtype=torch.float32).cuda() if self.args.cuda else torch.tensor(reward[-1], dtype=torch.float32)]
             for step in reversed(range(len(reward)-1)):
                 delta = reward[step] + DISCOUNT * value_preds[
                     step + 1] * masks[step +
@@ -537,12 +537,16 @@ class PolicyTrainer(object):
                 with torch.no_grad():
                     _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
                 loss = self.PPO_update(experience)
-                
-                writer.add(int((epoch+1)*i),'training/ action_loss', loss[0])
-                writer.add(int((epoch+1)*i),'training/ value_loss', loss[1])
-                writer.add(int((epoch+1)*i),'training/ entropy', loss[2])
+                print('epoch {}'.format(epoch))
+                print('i {}'.format(i))
+                print('training/action_loss {}'.format(loss[0]))
+                print('training/value_loss {}'.format(loss[1]))
+                print('training/entropy {}'.format(loss[2]))
+                writer.add(int((epoch+1)*i),'training/action_loss', loss[0])
+                writer.add(int((epoch+1)*i),'training/value_loss', loss[1])
+                writer.add(int((epoch+1)*i),'training/entropy', loss[2])
 
-                if i%int(self.args.num_episodes/2) ==0:
+                if i%int(self.args.num_episodes/10) ==0:
                     saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int((epoch+1)*i), self.args.model_dir)
 
                 #replay_buffer.add(experience)
@@ -562,7 +566,6 @@ def main():
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
     args = parser.parse_args()
-    torch.cuda.set_device(7)
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     agent_cls = KarelAgent
     env = KarelEditEnv(args)
