@@ -3,42 +3,72 @@ import GPUtil
 from time import sleep
 import subprocess
 import tqdm
+import os
 
 def every(seconds):
     while True:
         sleep(seconds)
         yield
 
-def run_tasks(tasks):
-    pbar = tqdm.tqdm(total=len(tasks))
-    current_processes = {}
-    try:
-        for _ in every(1):
-            pbar.update(0)
-            for gpu, (name, proc) in list(current_processes.items()):
-                retcode = proc.poll()
-                if retcode is not None:
-                    if retcode != 0:
-                        print("Process failed: ", name)
-                    del current_processes[gpu]
-                    pbar.update()
+def run_on_gpu(gpu, task):
+    command = "CUDA_VISIBLE_DEVICES={} {}".format(gpu, task)
+    proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, shell=os.environ['SHELL'])
+    return command, proc
 
-            open_gpus = set(GPUtil.getAvailable(limit=float('inf')))
-            valid_gpus = open_gpus - set(current_processes) - {0}
-            if not valid_gpus:
-                continue
-            if not tasks:
-                break
-            task = tasks.pop()
-            gpu = list(valid_gpus)[0]
-            command = "CUDA_VISIBLE_DEVICES={} {}".format(gpu, task)
-            current_processes[gpu] = command, subprocess.Popen(command, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            pbar.set_description("Using GPUs {}".format(set(current_processes)))
-        pbar.close()
-    finally:
-        for _, proc in current_processes.values():
-            proc.kill()
+class TaskRunner:
+    def __init__(self, tasks, *, max_memory):
+        self.current_processes = {}
+        self.pbar = tqdm.tqdm(total=len(tasks))
+        self.tasks = tasks
+
+        self.max_memory = max_memory
+
+    def handle_done(self):
+        for gpu, (name, proc) in list(self.current_processes.items()):
+            retcode = proc.poll()
+            if retcode is not None:
+                if retcode != 0:
+                    print("Process failed: ", name)
+                    print(proc.stderr.read().decode('utf-8'))
+                del self.current_processes[gpu]
+                self.pbar.update()
+
+    def valid_gpu(self):
+        open_gpus = set(GPUtil.getAvailable(limit=float('inf'), maxMemory=self.max_memory))
+        valid_gpus = open_gpus - set(self.current_processes) - {0}
+        if valid_gpus:
+            return list(valid_gpus)[0]
+        return None
+
+    def step(self):
+        self.pbar.update(0)
+        self.handle_done()
+        gpu = self.valid_gpu()
+        if gpu is None:
+            return
+        if not self.tasks:
+            return
+        self.current_processes[gpu] = run_on_gpu(gpu, self.tasks.pop())
+        self.pbar.set_description("Using GPUs {}".format(set(self.current_processes)))
+
+    def run_all(self):
+        try:
+            for _ in every(1):
+                if not (self.tasks or self.current_processes):
+                    break
+                self.step()
+        finally:
+            for _, proc in self.current_processes.values():
+                proc.kill()
+
+def run_tasks(tasks, **kwargs):
+    TaskRunner(tasks, **kwargs).run_all()
 
 if __name__ == '__main__':
-    import fileinput
-    run_tasks(list(fileinput.input()))
+    import argparse
+    from sys import stdin
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--max-memory", type=float, default=1.0)
+    args = parser.parse_args()
+
+    run_tasks(list(stdin), max_memory=args.max_memory)
