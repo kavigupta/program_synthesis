@@ -10,6 +10,19 @@ except ImportError:
     tb_summary = None
 
 
+class TensorBoardRLWrite(object):
+
+    def __init__(self, logdir, id):
+
+        if tb_summary is None:
+            raise ValueError(
+                "You must install TensorFlow " +
+                "to use Tensorboard summary writer.")
+        self._writer = tb_summary.SummaryWriter(logdir=logdir+id)
+
+    def add(self, step, key, value):
+        self._writer.add_scalar(key,value,step)
+
 class TensorBoardWriter(object):
     """Write events in TensorBoard format."""
 

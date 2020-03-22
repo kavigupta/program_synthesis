@@ -14,6 +14,7 @@ from models import get_model
 from datasets import data, dataset, set_vocab
 from datasets.karel import refine_env, mutation
 from tools import saver
+from tools.reporter import TensorBoardRLWrite
 from . import prepare_spec, karel_model
 from .modules import karel, attention
 
@@ -128,7 +129,7 @@ class KarelEditEnv(object):
             if edit_token%2 != 0:
                 op = 'replace'
             
-            computed_token = int(np.floor((edit_token - 4)/2))
+            computed_token = int(np.floor((edit_token.item() - 4)/2))
             if op == 'keep':
                 return int(code_seq[idx]), code_seq, idx+1
             if op == 'delete':
@@ -192,11 +193,11 @@ class KarelEditPolicy(nn.Module):
         self.model = get_model(args)
 
     def encode(self, input_grid, output_grid):
-        return self.model.model.task_encoder(input_grid,output_grid)
+        return self.model.model.encoder(input_grid,output_grid)
 
-    def encode_code(self, code_state, traces, trace_events):
+    def encode_code(self, code_state, input_grid, output_grid, traces, trace_events):
         # (*) Check if traces are in the correct format.
-        return self.model.model.code_encoder(code_state, traces, trace_events)
+        return self.model.model.code_encoder(code_state, input_grid, output_grid, traces, trace_events)
 
     def encode_trace(self, ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave ):
         return self.model.model.trace_encoder(ref_code_memory, ref_trace_grids,ref_trace_events, cag_interleave)
@@ -223,7 +224,7 @@ class KarelEditPolicy(nn.Module):
         io_embed = self.encode(input_grids, output_grids)
         # code_seq = ground thruth code, ref_code.ps.data = edited
 
-        ref_code_memory = self.encode_code(ref_code, ref_trace_grids, ref_trace_events)
+        ref_code_memory = self.encode_code(ref_code, input_grids, output_grids, ref_trace_grids, ref_trace_events)
         #(*) Alternative to lengths: list(ref_code.orig_lengths()) if method doesnt learn ! obs it is not a long as lengths
 
         ref_trace_memory = self.encode_trace( ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave)
@@ -406,7 +407,7 @@ class PolicyTrainer(object):
 
         if use_gae:
             gae = reward[-1]-value_preds[-1]
-            returns = [torch.tensor(reward[-1], dtype=torch.float32)]
+            returns = [torch.tensor(reward[-1], dtype=torch.float32).cuda() if not self.args.no_cuda else torch.tensor(reward[-1], dtype=torch.float32)]
             for step in reversed(range(len(reward)-1)):
                 delta = reward[step] + DISCOUNT * value_preds[
                     step + 1] * masks[step +
@@ -528,6 +529,7 @@ class PolicyTrainer(object):
 
 
     def train(self):
+        writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size/self.args.batch_size), self.args.erase_factor)
         for epoch in range(self.args.num_epochs):
 
@@ -535,10 +537,11 @@ class PolicyTrainer(object):
                 with torch.no_grad():
                     _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
                 loss = self.PPO_update(experience)
-                print(i)
-                print('action loss {}'.format(loss[0]))
-                print('value loss {}'.format(loss[1]))
-                print('entropy {}'.format(loss[2]))
+                
+                writer.add(int((epoch+1)*i),'training/ action_loss', loss[0])
+                writer.add(int((epoch+1)*i),'training/ value_loss', loss[1])
+                writer.add(int((epoch+1)*i),'training/ entropy', loss[2])
+
                 if i%int(self.args.num_episodes/2) ==0:
                     saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int((epoch+1)*i), self.args.model_dir)
 
@@ -555,17 +558,12 @@ class PolicyTrainer(object):
 
 
 def main():
-    # incorp into args
-    args = saver.ArgsDict(
-        num_epochs=100, max_rollout_length=10, replay_buffer_size=16384, erase_factor=0.01,
-        num_episodes=10, num_training_steps=10, batch_size=32, update_actor_epoch=10, 
-        karel_io_enc='lgrl', lr=0.001, cuda=False, karel_trace_enc='none')
 
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
     args = parser.parse_args()
-    #torch.cuda.set_device(2)
-    args.cuda = False #not args.no_cuda and torch.cuda.is_available()
+    torch.cuda.set_device(7)
+    args.cuda = not args.no_cuda and torch.cuda.is_available()
     agent_cls = KarelAgent
     env = KarelEditEnv(args)
 
