@@ -557,8 +557,10 @@ class PolicyTrainer(object):
         value_loss_epoch /= self.args.ppo_steps
         action_loss_epoch /= self.args.ppo_steps
         dist_entropy_epoch /= self.args.ppo_steps
+        reward_epoch = reward.detach().cpu().numpy() if self.args.cuda else reward.detach().numpy()
+        reward_epoch = np.mean(reward_epoch)
 
-        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch)
+        return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
 
     def PPO_update(self, batch):
 
@@ -641,7 +643,7 @@ class PolicyTrainer(object):
         dist_entropy_epoch /= self.args.ppo_steps
         reward_epoch = np.mean(np.array(reward))
 
-        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch, reward_epoch)
+        return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
 
 
     def train(self):
