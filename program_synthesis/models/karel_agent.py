@@ -246,9 +246,6 @@ class KarelAgent(object):
         self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
 
     def select_action(self, state, return_true_code=False ):
-        #return (mutation.ADD_ACTION, (3, 'move'))
-        #if epsilon_greedy is not None and np.random.random() < epsilon_greedy:
-        #    return np.random.randint(state.size)
         # labels: correct edit operations
         # probs: probability we assign each possible operation in sequence
         # orig_code: the code we try to recover
@@ -441,7 +438,8 @@ class PolicyTrainer(object):
 
         return prob_a, value_preds_batch_, returns_
 
-    def extend_values(value,lengths):
+    def extend_values(self,value,lengths):
+        value = value.view(-1)
         value_next_state = []
         start, end = 0, 0
         not_avail_value = torch.cuda.FloatTensor([0]) if self.args.cuda else torch.FloatTensor([0])
@@ -453,6 +451,18 @@ class PolicyTrainer(object):
 
         return value_next_state
 
+    def get_action_log_probs(self, old_action_probs_batch):
+
+        old_action_log_probs_batch = torch.log(old_action_probs_batch)
+
+        actions = torch.argmax(old_action_probs_batch,dim=1)
+
+        old_action_log_probs_batch = torch.gather(old_action_log_probs_batch, dim=1, index=actions.view(-1,1))
+
+        return old_action_log_probs_batch, actions
+
+    def Program_PPO_update(self,batch):
+        return batch
 
     def Simple_PPO_update(self, batch):
 
@@ -463,7 +473,7 @@ class PolicyTrainer(object):
 
         reward = torch.cuda.FloatTensor(reward) if self.args.cuda else torch.FloatTensor(reward)
         # convert rollout to a batch
-        prob_a, value_preds_batch_, reward_ = self.prepare_ppo_batch(lengths, old_action_log_probs_batch, value_preds_batch.view(-1), )
+        prob_a, value_preds_batch__orig, reward_ = self.prepare_ppo_batch(lengths, get_action_log_probs, value_preds_batch.view(-1), reward)
 
         value_loss_epoch = 0
         action_loss_epoch = 0
@@ -480,23 +490,27 @@ class PolicyTrainer(object):
             v_prime = self.extend_values(values,_)
 
             
-            # Ensure pi is same length 
+            # get log probs and entropy
             action_log_probs = torch.log(probs)
 
             m = torch.distributions.Categorical(probs)
 
             dist_entropy = m.entropy().mean()
 
-            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
+            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(probs,dim=1).view(-1,1))
         
 
             # batchify
-            pi_a, values, not_used = self.batchify(values, action_log_probs, torch.tensor(_), lengths, _) 
+
+            pi_a, not_used, not_used = self.batchify(action_log_probs, action_log_probs, value_preds_batch.view(-1), _, lengths)
+            not_used, not_used, td_target = self.batchify(action_log_probs, action_log_probs, v_prime*DISCOUNT, _, lengths) 
+            not_used, not_used, delta = self.batchify(action_log_probs, action_log_probs, v_prime*DISCOUNT-values, _, lengths)  
+            not_used, not_used, values_ = self.batchify(action_log_probs, action_log_probs, v_prime, _, lengths) 
+            not_used, not_used, value_preds_batch_ = self.batchify(action_log_probs, action_log_probs, values, _, lengths) 
 
             # Simple PPO update
-            td_target = reward_ + DISCOUNT * values
-            delta = td_target - value_preds_batch_
-            delta = delta.detach().numpy()
+            delta = delta + reward_
+            delta = delta.detach().cpu().numpy() if self.args.cuda else delta.detach().numpy()
 
             advantage_lst = []
             advantage = 0.0
@@ -517,15 +531,15 @@ class PolicyTrainer(object):
             # Value loss
 
             if self.args.use_clipped_value_loss:
-                value_pred_clipped = value_preds_batch_ + \
-                    (values - value_preds_batch_).clamp(-self.args.clip_param, self.args.clip_param)
-                value_losses = (values - returns_).pow(2)
+                value_pred_clipped = value_preds_batch__orig + \
+                    (value_preds_batch_ - value_preds_batch__orig).clamp(-self.args.clip_param, self.args.clip_param)
+                value_losses = (value_preds_batch_ - td_target).pow(2)
                 value_losses_clipped = (
-                    value_pred_clipped - returns_).pow(2)
+                    value_pred_clipped - td_target).pow(2)
                 value_loss = 0.5 * torch.max(value_losses,
                                                 value_losses_clipped).mean()
             else:
-                value_loss = 0.5 * (returns_ - values).pow(2).mean()
+                value_loss = 0.5 * (td_target - value_preds_batch_).pow(2).mean()
                 
             # Total loss
 
@@ -545,16 +559,6 @@ class PolicyTrainer(object):
         dist_entropy_epoch /= self.args.ppo_steps
 
         return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch)
-                
-    def get_action_log_probs(self, old_action_log_probs_batch):
-
-        old_action_log_probs_batch = torch.log(old_action_log_probs_batch)
-
-        actions = torch.argmax(old_action_log_probs_batch,dim=1)
-
-        old_action_log_probs_batch = torch.gather(old_action_log_probs_batch, dim=1, index=actions.view(-1,1))
-
-        return old_action_log_probs_batch, actions
 
     def PPO_update(self, batch):
 
@@ -570,7 +574,7 @@ class PolicyTrainer(object):
         adv_targ = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
 
         # convert rollout to a batch
-        prob_a, value_preds_batch_, returns_ = self.prepare_ppo_batch(lengths, old_action_log_probs_batch, value_preds_batch.view(-1), returns)
+        prob_a, value_preds_batch_, returns_ = self.prepare_ppo_batch(lengths, get_action_log_probs, value_preds_batch.view(-1), returns)
 
         value_loss_epoch = 0
         action_loss_epoch = 0
@@ -591,7 +595,7 @@ class PolicyTrainer(object):
 
             dist_entropy = m.entropy().mean()
 
-            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
+            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(probs,dim=1).view(-1,1))
 
             # batchify
             
@@ -644,6 +648,7 @@ class PolicyTrainer(object):
         writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         runner = 0
+        cum_reward = 0
         for epoch in range(self.args.num_epochs):
             
             for i, batch in enumerate(self.env.dataset_loader):
@@ -651,17 +656,20 @@ class PolicyTrainer(object):
                 with torch.no_grad():
                     _, experience = rollout(self.env, batch, self.actor_critic, True, self.args.max_rollout_length)
                 runner+=1*self.args.batch_size
-                loss = self.PPO_update(experience)
+                loss = self.Simple_PPO_update(experience)
                 print('epoch {}'.format(epoch))
                 print('i {}'.format(i))
                 print('training/action_loss {}'.format(loss[0]))
                 print('training/value_loss {}'.format(loss[1]))
                 print('training/entropy {}'.format(loss[2]))
                 print('training/reward {}'.format(loss[3]))
+                cum_reward += loss[3]
+                print('training/cummulative_reward {}'.format(cum_reward))
                 writer.add(runner,'training/action_loss', loss[0])
                 writer.add(runner,'training/value_loss', loss[1])
                 writer.add(runner,'training/entropy', loss[2])
                 writer.add(runner,'training/reward', loss[3])
+                writer.add(runner,'training/cummulative_reward', cum_reward)
                 #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):

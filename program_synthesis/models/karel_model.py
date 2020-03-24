@@ -365,7 +365,6 @@ class KarelLGRLRefineBatchProcessor(object):
             ref_code = None
         else:
             append_eos = self.args.karel_refine_dec == 'edit'
-            #append_eos = False
             ref_code = prepare_spec.lists_to_packed_sequence(
                 [item.ref_example.code_sequence + ('</S>',) for item in batch]
                 if append_eos else
@@ -374,7 +373,6 @@ class KarelLGRLRefineBatchProcessor(object):
                 False,
                 volatile=False)
 
-        # edit this guy to contain homogenous length edits
         if self.args.karel_refine_dec == 'edit':
             dec_data = self.compute_edit_ops(batch, ref_code)
         else:
