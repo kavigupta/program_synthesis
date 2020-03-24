@@ -22,7 +22,7 @@ from .modules import karel, attention
 # TODO: Make sure that it is possible to choose from vocab size action space
 # Alternatively have 2 more: remove token, add token where add token is treated in a second selection
 
-DISCOUNT = 0.9
+DISCOUNT = 0.99
 lmbda = 0.95
 EPISLON = 0.1
 ALPHA = 0.7
@@ -234,7 +234,7 @@ class KarelEditPolicy(nn.Module):
                                            dec_data)
 
         return logits, labels, dec_output, lengths
-
+#torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1)
 
 class KarelAgent(object):
 
@@ -309,9 +309,9 @@ class ReplayBuffer(object):
 StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths'])
 
 
-def rollout(env, agent, epsilon_greedy, max_rollout_length):
+def rollout(env, state, agent, epsilon_greedy, max_rollout_length):
     eps = EPISLON if epsilon_greedy else None
-    state = env.reset()
+    #state = env.reset()
     # (*) check if traces work here
     # Update they don't becuase the SL model doesn't even have traces: they are equal to none :/
     experience = []
@@ -387,7 +387,7 @@ class PolicyTrainer(object):
             end += i
             end_ += j
             v_prime.append(values[start:end].mean())
-            pi.append(action_log_probs[start:end].mean())
+            pi.append(action_log_probs[start:end].sum())
             advantage.append(adv_targ[start_:end_].mean())
             end += i
             start_ += j
@@ -431,7 +431,7 @@ class PolicyTrainer(object):
         s,e =0,0
         for j in (lengths):
             e+= j
-            prob_a.append(old_action_log_probs_batch[s:e].mean())
+            prob_a.append(old_action_log_probs_batch[s:e].sum())
             value_preds_batch_.append(value_preds_batch[s:e].mean())
             returns_.append(returns[s:e].mean())
             s += j
@@ -441,21 +441,132 @@ class PolicyTrainer(object):
 
         return prob_a, value_preds_batch_, returns_
 
-    def PPO_update(self, batch):
+    def extend_values(value,lengths):
+        value_next_state = []
+        start, end = 0, 0
+        not_avail_value = torch.cuda.FloatTensor([0]) if self.args.cuda else torch.FloatTensor([0])
+        for i in lengths:
+            end += i
+            value_next_state.append(torch.cat([value[start+1:end],not_avail_value]))
+            start += i
+        value_next_state = torch.cat(value_next_state)
+
+        return value_next_state
+
+
+    def Simple_PPO_update(self, batch):
 
         # Fetch rollout data
         state, old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[0]
+
+        get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
+
+        reward = torch.cuda.FloatTensor(reward) if self.args.cuda else torch.FloatTensor(reward)
+        # convert rollout to a batch
+        prob_a, value_preds_batch_, reward_ = self.prepare_ppo_batch(lengths, old_action_log_probs_batch, value_preds_batch.view(-1), )
+
+        value_loss_epoch = 0
+        action_loss_epoch = 0
+        dist_entropy_epoch = 0  
+
+        for i in range(self.args.ppo_steps):
+            
+            # try instead of using state_ to use state here and split the output value into v_s and v_prime as in PPO itself            
+
+            # value function for next state
+            labels, probs, _, values, _ = self.actor_critic.select_action(state,return_true_code=False)
+
+            # extend values
+            v_prime = self.extend_values(values,_)
+
+            
+            # Ensure pi is same length 
+            action_log_probs = torch.log(probs)
+
+            m = torch.distributions.Categorical(probs)
+
+            dist_entropy = m.entropy().mean()
+
+            action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(action_log_probs,dim=1).view(-1,1))
+        
+
+            # batchify
+            pi_a, values, not_used = self.batchify(values, action_log_probs, torch.tensor(_), lengths, _) 
+
+            # Simple PPO update
+            td_target = reward_ + DISCOUNT * values
+            delta = td_target - value_preds_batch_
+            delta = delta.detach().numpy()
+
+            advantage_lst = []
+            advantage = 0.0
+            for delta_t in delta[::-1]:
+                advantage = DISCOUNT * lmbda * advantage + delta_t
+                advantage_lst.append([advantage])
+            advantage_lst.reverse()
+            advantage = torch.cuda.FloatTensor(advantage_lst).view(-1) if self.args.cuda else torch.tensor(advantage_lst, dtype=torch.float).view(-1)
+
+                        # Action loss
+
+            ratio = torch.exp(pi_a -prob_a)
+            surr1 = ratio * advantage
+            surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
+                                1.0 + self.args.clip_param) * advantage
+            action_loss = -torch.min(surr1, surr2).mean() 
+
+            # Value loss
+
+            if self.args.use_clipped_value_loss:
+                value_pred_clipped = value_preds_batch_ + \
+                    (values - value_preds_batch_).clamp(-self.args.clip_param, self.args.clip_param)
+                value_losses = (values - returns_).pow(2)
+                value_losses_clipped = (
+                    value_pred_clipped - returns_).pow(2)
+                value_loss = 0.5 * torch.max(value_losses,
+                                                value_losses_clipped).mean()
+            else:
+                value_loss = 0.5 * (returns_ - values).pow(2).mean()
+                
+            # Total loss
+
+            self.actor_critic.optimizer.zero_grad()
+            (value_loss * self.args.value_loss_coef + action_loss -
+                dist_entropy * self.args.entropy_coef).backward()
+            nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
+                                        self.args.max_grad_norm)
+            self.actor_critic.optimizer.step()
+
+            value_loss_epoch += value_loss.item()
+            action_loss_epoch += action_loss.item()
+            dist_entropy_epoch += dist_entropy.item()
+
+        value_loss_epoch /= self.args.ppo_steps
+        action_loss_epoch /= self.args.ppo_steps
+        dist_entropy_epoch /= self.args.ppo_steps
+
+        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch)
+                
+    def get_action_log_probs(self, old_action_log_probs_batch):
 
         old_action_log_probs_batch = torch.log(old_action_log_probs_batch)
 
         actions = torch.argmax(old_action_log_probs_batch,dim=1)
 
         old_action_log_probs_batch = torch.gather(old_action_log_probs_batch, dim=1, index=actions.view(-1,1))
+
+        return old_action_log_probs_batch, actions
+
+    def PPO_update(self, batch):
+
+        # Fetch rollout data
+        state, old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[0]
+
+        get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
         #state_ = self.update_states(state, new_state)
 
         # Compute advantage
         returns = self.compute_return(reward,value_preds_batch.view(-1), lengths, use_gae=True)
-        advantages = torch.Tensor(returns) - value_preds_batch.view(-1)
+        advantages = returns - value_preds_batch.view(-1)
         adv_targ = (advantages - advantages.mean()) / (advantages.std() + 1e-5)
 
         # convert rollout to a batch
@@ -465,7 +576,7 @@ class PolicyTrainer(object):
         action_loss_epoch = 0
         dist_entropy_epoch = 0
 
-        for e in range(self.args.num_training_steps):
+        for e in range(self.args.ppo_steps):
             
             # sample new data?
 
@@ -521,43 +632,44 @@ class PolicyTrainer(object):
             action_loss_epoch += action_loss.item()
             dist_entropy_epoch += dist_entropy.item()
 
-        value_loss_epoch /= self.args.num_training_steps
-        action_loss_epoch /= self.args.num_training_steps
-        dist_entropy_epoch /= self.args.num_training_steps
+        value_loss_epoch /= self.args.ppo_steps
+        action_loss_epoch /= self.args.ppo_steps
+        dist_entropy_epoch /= self.args.ppo_steps
+        reward_epoch = np.mean(np.array(reward))
 
-        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch)
+        return (value_loss_epoch, action_loss_epoch, dist_entropy_epoch, reward_epoch)
 
 
     def train(self):
         writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
-        replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size/self.args.batch_size), self.args.erase_factor)
+        replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
+        runner = 0
         for epoch in range(self.args.num_epochs):
-
-            for i in range(self.args.num_episodes):
+            
+            for i, batch in enumerate(self.env.dataset_loader):
+            #for i in range(self.args.num_episodes):
                 with torch.no_grad():
-                    _, experience = rollout(self.env, self.actor_critic, True, self.args.max_rollout_length)
+                    _, experience = rollout(self.env, batch, self.actor_critic, True, self.args.max_rollout_length)
+                runner+=1*self.args.batch_size
                 loss = self.PPO_update(experience)
                 print('epoch {}'.format(epoch))
                 print('i {}'.format(i))
                 print('training/action_loss {}'.format(loss[0]))
                 print('training/value_loss {}'.format(loss[1]))
                 print('training/entropy {}'.format(loss[2]))
-                writer.add(int((epoch+1)*i),'training/action_loss', loss[0])
-                writer.add(int((epoch+1)*i),'training/value_loss', loss[1])
-                writer.add(int((epoch+1)*i),'training/entropy', loss[2])
-
-                if i%int(self.args.num_episodes/10) ==0:
-                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int((epoch+1)*i), self.args.model_dir)
-
+                print('training/reward {}'.format(loss[3]))
+                writer.add(runner,'training/action_loss', loss[0])
+                writer.add(runner,'training/value_loss', loss[1])
+                writer.add(runner,'training/entropy', loss[2])
+                writer.add(runner,'training/reward', loss[3])
                 #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):
             #    batch = replay_buffer.sample(1)
-            #    self.PPO_update(batch)
 
-            #if (epoch + 1) % self.args.update_actor_epoch == 0:
-            #    self.actor_critic.update(self.critic)
-                # log info here
+            if (epoch + 1) % 1 == 0:
+            #if i%int(self.args.num_episodes/2) ==0:
+                saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, epoch, self.args.model_dir)
 
 
 

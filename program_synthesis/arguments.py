@@ -36,7 +36,7 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--lr_decay_rate', type=float, default = None) #0.5
         train_group.add_argument('--gradient-clip', type=float)
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
-        train_group.add_argument('--num_epochs', type=int, default=5)
+        train_group.add_argument('--num_epochs', type=int, default=10)
         train_group.add_argument('--num_units', type=int, default=100)
         train_group.add_argument('--num_placeholders', type=int, default=0)#100
         train_group.add_argument('--num-att-heads', type=int, default=8)
@@ -53,13 +53,14 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--max_rollout_length', type=int, default=1)
         train_group.add_argument('--replay_buffer_size', type=int, default=16384)
         train_group.add_argument('--erase_factor', type=float, default=0.01)
-        train_group.add_argument('--num_episodes', type=int, default=1000)
-        train_group.add_argument('--num_training_steps', type=int, default=2)
-        train_group.add_argument('--max_grad_norm', type=int, default=5)
+        train_group.add_argument('--num_episodes', type=int, default=150)
+        train_group.add_argument('--num_training_steps', type=int, default=50)
+        train_group.add_argument('--ppo_steps', type=int, default=2)
+        train_group.add_argument('--max_grad_norm', type=int, default=0.5)
         train_group.add_argument('--use_clipped_value_loss', default=True)
         train_group.add_argument('--clip_param', type=float, default=0.2)
-        train_group.add_argument('--value_loss_coef', type=float, default=10)
-        train_group.add_argument('--entropy_coef', type=float, default=10)
+        train_group.add_argument('--value_loss_coef', type=float, default=0.05)
+        train_group.add_argument('--entropy_coef', type=float, default=0.01)
 
         train_group.add_argument(
             '--reinforce-step', type=int, default=0,
