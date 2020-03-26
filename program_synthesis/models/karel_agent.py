@@ -27,6 +27,8 @@ lmbda = 0.95
 EPISLON = 0.1
 ALPHA = 0.7
 
+StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths'])
+
 
 #  https://arxiv.org/pdf/1511.04143.pdf
 
@@ -169,8 +171,56 @@ class KarelEditEnv(object):
 
         return next_states
 
+    def update_states(self, states, new_states):
+
+        def list_length(new_states):
+
+            lengths_lst = []
+            for i in range(len(new_states)):
+                lengths_lst.append(len(new_states[i]))
+
+            return lengths_lst
+
+        input_grids, output_grids, code_seqs, \
+            dec_data, ref_code, ref_trace_grids,\
+                ref_trace_events, cag_interleave, orig_examples = states
+
+
+        lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
+
+        v = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(lists_sorted, 0), False, False)
+        lens = prepare_spec.lengths(lists_sorted)
+        ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
+                v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
+
+        ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
+
+        dec_data_new = self.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
+        
+        return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
+    
+
+    def rollout(self, state, agent, max_rollout_length):
+        #state = env.reset()
+        # (*) check if traces work here
+        # Update they don't becuase the SL model doesn't even have traces: they are equal to none :/
+        experience = []
+        success = False
+        for _ in range(max_rollout_length):
+            # And here when the code_encoder is used 
+            action = agent.select_action(state, return_true_code=True )
+            new_state, reward, done, _ = self.step(action)
+            experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4]))
+            new_state = self.update_states(state, new_state)
+            state = new_state
+            #if done:
+            #    success = True
+            #    break
+        return success, experience
+
 
     def step(self, action):
+        #(*) labels are for some reason very similar to gen results after 6 minutes..
         # Rewrite this guy to be about using the decoder output again!
         (labels, probs, code_seq, values, lengths) = action
 
@@ -232,8 +282,11 @@ class KarelEditPolicy(nn.Module):
         logits, labels, dec_output, lengths = self.decode(io_embed, ref_code_memory,
                                            ref_trace_memory, code_seqs,
                                            dec_data)
-
-        return logits, labels, dec_output, lengths
+        
+        if not self.args.use_code_level_state:
+            return logits, labels, dec_output, lengths
+        else:
+            return logits, labels, torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1), lengths
 #torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1)
 
 class KarelAgent(object):
@@ -243,7 +296,10 @@ class KarelAgent(object):
         self.model = KarelEditPolicy(30, args)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
-        self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
+        if not args.use_code_level_state:
+            self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
+        else:
+            self.critic = nn.Linear(512*3, 1, bias=False).cuda() if args.cuda else nn.Linear(512*3, 1, bias=False)
 
     def select_action(self, state, return_true_code=False ):
         # labels: correct edit operations
@@ -255,31 +311,15 @@ class KarelAgent(object):
         return (labels, probs, orig_code, values, lengths)
 
     def best_action_value(self, states, return_true_code):
-        #input_grids, output_grids = tasks
-        #task_state = tasks #self.model.encode(input_grids, output_grids)
         logits, labels, dec_output, lengths = self.model.action_value(states)
         
         probs = nn.functional.softmax(logits,dim=1)
 
         values = self.critic(dec_output)
         if return_true_code:
-            return labels, probs, states.code_seqs, values, lengths
+            return labels, probs, states[2], values, lengths
         else:
             return labels, probs, [], values, lengths
-
-    def train(self, tasks, states, actions, targets):
-        self.optimizer.zero_grad()
-        input_grids, output_grids = tasks
-        task_state = self.model.encode(input_grids, output_grids)
-        action_values = self.model.action_value(task_state, states)
-        current_value = action_values.dot(actions)
-        loss = self.criterion(current_value, targets)
-        loss.backward()
-        self.optimizer.step()
-
-    def update(self, other):
-        self.model.load_state_dict(other.model.state_dict())
-
 
 class ReplayBuffer(object):
 
@@ -301,9 +341,6 @@ class ReplayBuffer(object):
         replace_mode = size > len(self.buffer)
         index = np.random.choice(self.size, size=size, replace=replace_mode)
         return [self.buffer[idx] for idx in index]
-
-
-StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths'])
 
 
 def rollout(env, state, agent, epsilon_greedy, max_rollout_length):
@@ -386,7 +423,7 @@ class PolicyTrainer(object):
             v_prime.append(values[start:end].mean())
             pi.append(action_log_probs[start:end].sum())
             advantage.append(adv_targ[start_:end_].mean())
-            end += i
+            start += i
             start_ += j
         
         pi = torch.stack(pi)
@@ -461,8 +498,153 @@ class PolicyTrainer(object):
 
         return old_action_log_probs_batch, actions
 
-    def Program_PPO_update(self,batch):
-        return batch
+    def compute_action_loss(self, pi_a, prob_a, advantage):
+        ratio = torch.exp(pi_a - prob_a)
+        surr1 = ratio * advantage
+        surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
+                                1.0 + self.args.clip_param) * advantage
+        action_loss = -torch.min(surr1, surr2).mean()
+        return action_loss
+    
+    def compute_value_loss(self, value_preds_batch_, values, returns_):
+
+        if self.args.use_clipped_value_loss:
+            value_pred_clipped = value_preds_batch_ + \
+                (values - value_preds_batch_).clamp(-self.args.clip_param, self.args.clip_param)
+            value_losses = (values - returns_).pow(2)
+            value_losses_clipped = (
+                value_pred_clipped - returns_).pow(2)
+            value_loss = 0.5 * torch.max(value_losses,
+                                            value_losses_clipped).mean()
+        else:
+            value_loss = 0.5 * (returns_ - values).pow(2).mean()
+
+        return value_loss
+    
+    def compute_total_loss(self, value_loss, action_loss, dist_entropy):
+        self.actor_critic.optimizer.zero_grad()
+        (value_loss * self.args.value_loss_coef + action_loss - dist_entropy * self.args.entropy_coef).backward()
+        nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
+                                        self.args.max_grad_norm)
+        self.actor_critic.optimizer.step()
+        return
+
+    def action_batch(self, action_log_probs, lengths):
+        
+        start,end = 0,0
+        pi = []
+        for i in (lengths):
+            end += i
+            pi.append(action_log_probs[start:end].sum())
+            start += i
+        
+        pi = torch.stack(pi)
+
+        return pi
+
+    def initialise_rollout_batch(self):
+        return torch.zeros(self.args.max_rollout_length, self.args.batch_size).cuda() if self.args.cuda else torch.zeros(self.args.max_rollout_length, self.args.batch_size)
+
+    def Program_PPO_update(self, batch):
+        
+        # store data
+        pi_old = self.initialise_rollout_batch()
+        reward_s =  self.initialise_rollout_batch()
+        value_preds_batch__origs =  self.initialise_rollout_batch()
+        
+        # Fetch stored rollout data
+        for i in range(len(batch)):
+
+            old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[i][1:]
+            
+            get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
+
+            reward = torch.cuda.FloatTensor(reward) if self.args.cuda else torch.FloatTensor(reward)
+
+            prob_a, _, reward_ = self.prepare_ppo_batch(lengths, get_action_log_probs, get_action_log_probs.view(-1), reward)
+            pi_old[i] = prob_a
+            reward_s[i] = reward_
+
+            value_preds_batch__origs[i] = value_preds_batch.view(-1)
+
+        state_ = self.update_states(batch[-1][0], new_state)
+
+        value_loss_epoch = 0
+        action_loss_epoch = 0
+        dist_entropy_epoch = 0  
+
+        for i in range(self.args.ppo_steps):
+            
+            # recalculate value
+            values = self.initialise_rollout_batch()
+            pi_a = self.initialise_rollout_batch()
+            dist_entropy =  self.initialise_rollout_batch()
+
+            # run over rolloout
+            for idx, b in enumerate(batch):
+                labels, probs, _, value, _ = self.actor_critic.select_action(b[0],return_true_code=False)
+                values[idx]=value.view(-1)
+
+                # get log probs and entropy
+                action_log_probs = torch.log(probs)
+
+                m = torch.distributions.Categorical(probs)
+
+                dist_entropy[idx] = m.entropy().mean()
+
+                action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(probs,dim=1).view(-1,1))
+                
+                pi_new = self.action_batch(action_log_probs, _)
+                pi_a[idx] = pi_new
+
+            dist_entropy = dist_entropy.mean()
+
+            # calculate essential values
+            v_prime = values[1:]
+            labels, probs, _, value, _ = self.actor_critic.select_action(state_,return_true_code=False)
+            v_prime = torch.cat((v_prime,value.view(1,-1)))
+
+            td_target = v_prime * DISCOUNT
+            delta = td_target - values
+
+            # Simple PPO update
+            delta = delta + reward_s
+            delta = delta.detach().cpu().numpy() if self.args.cuda else delta.detach().numpy()
+
+            advantage_lst = []
+            advantage = 0.0
+            for delta_t in delta[::-1]:
+                advantage = DISCOUNT * lmbda * advantage + delta_t
+                advantage_lst.append([advantage])
+            advantage_lst.reverse()
+            advantage = torch.cuda.FloatTensor(advantage_lst).view(-1) if self.args.cuda else torch.tensor(advantage_lst, dtype=torch.float).view(-1)
+            pi_a = pi_a.view(-1)
+            pi_old = pi_old.view(-1)
+            td_target = td_target.view(-1)
+            values = values.view(-1)
+            value_preds_batch__origs = value_preds_batch__origs.view(-1)
+
+            # Action loss
+            action_loss = self.compute_action_loss(pi_a, pi_old, advantage)
+
+            # Value loss
+            value_loss = self.compute_value_loss(value_preds_batch__origs, values, td_target)
+       
+            # Total loss
+
+            self.compute_total_loss(value_loss, action_loss, dist_entropy)
+
+            value_loss_epoch += value_loss.item()
+            action_loss_epoch += action_loss.item()
+            dist_entropy_epoch += dist_entropy.item()
+
+        value_loss_epoch /= self.args.ppo_steps
+        action_loss_epoch /= self.args.ppo_steps
+        dist_entropy_epoch /= self.args.ppo_steps
+        reward_epoch = reward_s.detach().cpu().numpy() if self.args.cuda else reward_s.detach().numpy()
+        reward_epoch = np.mean(reward_epoch)
+
+        return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
 
     def Simple_PPO_update(self, batch):
 
@@ -488,7 +670,6 @@ class PolicyTrainer(object):
 
             # extend values
             v_prime = self.extend_values(values,_)
-
             
             # get log probs and entropy
             action_log_probs = torch.log(probs)
@@ -501,7 +682,6 @@ class PolicyTrainer(object):
         
 
             # batchify
-
             pi_a, not_used, not_used = self.batchify(action_log_probs, action_log_probs, value_preds_batch.view(-1), _, lengths)
             not_used, not_used, td_target = self.batchify(action_log_probs, action_log_probs, v_prime*DISCOUNT, _, lengths) 
             not_used, not_used, delta = self.batchify(action_log_probs, action_log_probs, v_prime*DISCOUNT-values, _, lengths)  
@@ -520,35 +700,15 @@ class PolicyTrainer(object):
             advantage_lst.reverse()
             advantage = torch.cuda.FloatTensor(advantage_lst).view(-1) if self.args.cuda else torch.tensor(advantage_lst, dtype=torch.float).view(-1)
 
-                        # Action loss
-
-            ratio = torch.exp(pi_a -prob_a)
-            surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
-                                1.0 + self.args.clip_param) * advantage
-            action_loss = -torch.min(surr1, surr2).mean() 
+            # Action loss
+            action_loss = self.compute_action_loss(pi_a, prob_a, advantage)
 
             # Value loss
-
-            if self.args.use_clipped_value_loss:
-                value_pred_clipped = value_preds_batch__orig + \
-                    (value_preds_batch_ - value_preds_batch__orig).clamp(-self.args.clip_param, self.args.clip_param)
-                value_losses = (value_preds_batch_ - td_target).pow(2)
-                value_losses_clipped = (
-                    value_pred_clipped - td_target).pow(2)
-                value_loss = 0.5 * torch.max(value_losses,
-                                                value_losses_clipped).mean()
-            else:
-                value_loss = 0.5 * (td_target - value_preds_batch_).pow(2).mean()
-                
+            value_loss = self.compute_value_loss(value_preds_batch__orig, value_preds_batch_, td_target)
+       
             # Total loss
 
-            self.actor_critic.optimizer.zero_grad()
-            (value_loss * self.args.value_loss_coef + action_loss -
-                dist_entropy * self.args.entropy_coef).backward()
-            nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
-                                        self.args.max_grad_norm)
-            self.actor_critic.optimizer.step()
+            self.compute_total_loss(value_loss, action_loss, dist_entropy)
 
             value_loss_epoch += value_loss.item()
             action_loss_epoch += action_loss.item()
@@ -568,7 +728,6 @@ class PolicyTrainer(object):
         state, old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[0]
 
         get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
-        #state_ = self.update_states(state, new_state)
 
         # Compute advantage
         returns = self.compute_return(reward,value_preds_batch.view(-1), lengths, use_gae=True)
@@ -584,10 +743,6 @@ class PolicyTrainer(object):
 
         for e in range(self.args.ppo_steps):
             
-            # sample new data?
-
-            #labels, probs, _, values, _ = self.actor_critic.select_action(state_,return_true_code=False)
-
             # get value of states using current policy
             labels, probs, _, values, _ = self.actor_critic.select_action(state,return_true_code=False)
 
@@ -604,35 +759,14 @@ class PolicyTrainer(object):
             pi_a, values, advantage = self.batchify(values, action_log_probs, adv_targ, _, lengths) 
                 
             # Action loss
-
-            ratio = torch.exp(pi_a -
-                            prob_a)
-            surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
-                                1.0 + self.args.clip_param) * advantage
-            action_loss = -torch.min(surr1, surr2).mean() 
+            action_loss = self.compute_action_loss(pi_a, prob_a, advantage)
 
             # Value loss
-
-            if self.args.use_clipped_value_loss:
-                value_pred_clipped = value_preds_batch_ + \
-                    (values - value_preds_batch_).clamp(-self.args.clip_param, self.args.clip_param)
-                value_losses = (values - returns_).pow(2)
-                value_losses_clipped = (
-                    value_pred_clipped - returns_).pow(2)
-                value_loss = 0.5 * torch.max(value_losses,
-                                                value_losses_clipped).mean()
-            else:
-                value_loss = 0.5 * (returns_ - values).pow(2).mean()
+            value_loss = self.compute_value_loss(value_preds_batch_, values, returns_)
                 
             # Total loss
 
-            self.actor_critic.optimizer.zero_grad()
-            (value_loss * self.args.value_loss_coef + action_loss -
-                dist_entropy * self.args.entropy_coef).backward()
-            nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
-                                        self.args.max_grad_norm)
-            self.actor_critic.optimizer.step()
+            self.compute_total_loss(value_loss, action_loss, dist_entropy)
 
             value_loss_epoch += value_loss.item()
             action_loss_epoch += action_loss.item()
@@ -645,9 +779,8 @@ class PolicyTrainer(object):
 
         return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
 
-
     def train(self):
-        writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
+        #writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         runner = 0
         cum_reward = 0
@@ -656,9 +789,9 @@ class PolicyTrainer(object):
             for i, batch in enumerate(self.env.dataset_loader):
             #for i in range(self.args.num_episodes):
                 with torch.no_grad():
-                    _, experience = rollout(self.env, batch, self.actor_critic, True, self.args.max_rollout_length)
+                    _, experience = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length)
                 runner+=1*self.args.batch_size
-                loss = self.Simple_PPO_update(experience)
+                loss = self.Program_PPO_update(experience)
                 print('epoch {}'.format(epoch))
                 print('i {}'.format(i))
                 print('training/action_loss {}'.format(loss[0]))

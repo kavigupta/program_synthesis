@@ -15,7 +15,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--dataset_filter_code_length', type=int, default=0)
     parser.add_argument('--dataset_bucket', action='store_true', default=False)
     parser.add_argument('--vocab_min_freq', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=64)#128
+    parser.add_argument('--batch_size', type=int, default=16)#128
     parser.add_argument('--load-sync', action='store_true')
 
     parser.add_argument(
@@ -50,14 +50,15 @@ def get_arg_parser(title, mode):
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
-        train_group.add_argument('--max_rollout_length', type=int, default=1)
+        train_group.add_argument('--max_rollout_length', type=int, default=10)
         train_group.add_argument('--replay_buffer_size', type=int, default=16384)
         train_group.add_argument('--erase_factor', type=float, default=0.01)
         train_group.add_argument('--num_episodes', type=int, default=150)
         train_group.add_argument('--num_training_steps', type=int, default=50)
         train_group.add_argument('--ppo_steps', type=int, default=2)
         train_group.add_argument('--max_grad_norm', type=int, default=0.5)
-        train_group.add_argument('--use_clipped_value_loss', default=True)
+        train_group.add_argument('--use_clipped_value_loss', default=False)
+        train_group.add_argument('--use_code_level_state', default=True)
         train_group.add_argument('--clip_param', type=float, default=0.2)
         train_group.add_argument('--value_loss_coef', type=float, default=0.05)
         train_group.add_argument('--entropy_coef', type=float, default=0.01)

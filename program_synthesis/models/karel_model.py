@@ -504,9 +504,8 @@ class KarelLGRLRefineBatchProcessor(object):
 
         edit_lists = []
         for batch_idx, item in enumerate(zip(batch,code_seqs)):
-            code_sequence = item[1].numpy()
-            code_sequence = list(np.array(item[1])*(np.array(item[1])>0))
-            ref_example_code_sequence = list(np.array(item[0])*(np.array(item[0])>0))
+            code_sequence = list(np.array(item[1])[np.array(item[1])>0])
+            ref_example_code_sequence = list(np.array(item[0])[np.array(item[0])>0])
             edit_ops =  list(
                     edit.compute_edit_ops_no_stoi(ref_example_code_sequence,
                         code_sequence))
