@@ -199,7 +199,6 @@ class KarelEditEnv(object):
         
         return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
     
-
     def rollout(self, state, agent, max_rollout_length):
         #state = env.reset()
         # (*) check if traces work here
@@ -246,7 +245,6 @@ class KarelEditPolicy(nn.Module):
         return self.model.model.encoder(input_grid,output_grid)
 
     def encode_code(self, code_state, input_grid, output_grid, traces, trace_events):
-        # (*) Check if traces are in the correct format.
         return self.model.model.code_encoder(code_state, input_grid, output_grid, traces, trace_events)
 
     def encode_trace(self, ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave ):
@@ -275,7 +273,6 @@ class KarelEditPolicy(nn.Module):
         # code_seq = ground thruth code, ref_code.ps.data = edited
 
         ref_code_memory = self.encode_code(ref_code, input_grids, output_grids, ref_trace_grids, ref_trace_events)
-        #(*) Alternative to lengths: list(ref_code.orig_lengths()) if method doesnt learn ! obs it is not a long as lengths
 
         ref_trace_memory = self.encode_trace( ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave)
 
