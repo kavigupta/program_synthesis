@@ -44,7 +44,7 @@ class TaskRunner:
         return None
 
     def step(self):
-        self.pbar.update(0)
+        self.pbar.refresh()
         self.handle_done()
         gpu = self.valid_gpu()
         if gpu is None:
