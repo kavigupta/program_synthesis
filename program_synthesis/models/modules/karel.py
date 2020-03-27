@@ -432,10 +432,16 @@ class SumTrace(nn.Module):
         self.grid_dim = grid_dim
 
     def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
-        all_sum_traces = self.produce_sum_trace(trace_embed, trace_events, program_lengths)
+        all_sum_traces = self.summarize_trace_per_token(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
 
-    def produce_sum_trace(self, trace_embed, trace_events, program_lengths):
+    def trace_for_no_token(self):
+        return torch.zeros(self.grid_dim)
+
+    def summarize_traces(self, traces, weights):
+        return (traces * weights.unsqueeze(-1)).sum(0)
+
+    def summarize_trace_per_token(self, trace_embed, trace_events, program_lengths):
         all_sum_traces = []
         for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
             # traces_Per_program_token[i] == (trace indices, weights)
@@ -451,7 +457,7 @@ class SumTrace(nn.Module):
             sum_traces = []
             for i in range(prog_len):
                 if not trace_indices[i]:
-                    zeros = torch.zeros(trace_embed.ps.data.shape[-1])
+                    zeros = self.summarize_emtpy_set_of_traces()
                     if trace_embed.ps.data.is_cuda:
                         zeros = zeros.cuda()
                     sum_traces.append(Variable(zeros))
@@ -460,7 +466,7 @@ class SumTrace(nn.Module):
                 weights_for_this = Variable(torch.FloatTensor(weights[i]))
                 if traces_for_token.is_cuda:
                     weights_for_this = weights_for_this.cuda()
-                sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
+                sum_traces.append(self.summarize_traces(traces_for_token, weights_for_this))
 
             all_sum_traces.append(torch.stack(sum_traces, dim=0))
         return all_sum_traces
