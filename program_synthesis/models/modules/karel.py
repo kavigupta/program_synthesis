@@ -1300,7 +1300,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         # insertion only.
         # In all cases, don't allow <s>.
         # Positions where mask is 1 will get -inf as the logit.
-        self.end_mask = torch.ByteTensor([
+        self.end_mask = torch.BoolTensor([
             [1] + [0] * (num_ops - 1),
             # <s>, </s>, keep, delete
             np.concatenate(([1, 0, 1, 1],  self.increment_source_loc[4:])).tolist()
