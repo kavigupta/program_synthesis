@@ -18,12 +18,13 @@ def run_on_gpu(gpu, task):
     return command, file, proc
 
 class TaskRunner:
-    def __init__(self, tasks, *, max_memory):
+    def __init__(self, tasks, *, max_memory, max_procs):
         self.current_processes = {}
         self.pbar = tqdm.tqdm(total=len(tasks))
         self.tasks = tasks
 
         self.max_memory = max_memory
+        self.max_procs = max_procs
 
     def handle_done(self):
         for gpu, (name, file, proc) in list(self.current_processes.items()):
@@ -46,6 +47,8 @@ class TaskRunner:
     def step(self):
         self.pbar.refresh()
         self.handle_done()
+        if len(self.current_processes) >= self.max_procs:
+            return
         gpu = self.valid_gpu()
         if gpu is None:
             return
@@ -74,6 +77,7 @@ if __name__ == '__main__':
     from sys import stdin
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-memory", type=float, default=1.0)
+    parser.add_argument("--max-procs", type=int, default=float('inf'))
     args = parser.parse_args()
 
-    run_tasks(list(stdin), max_memory=args.max_memory)
+    run_tasks(list(stdin), max_memory=args.max_memory, max_procs=args.max_procs)
