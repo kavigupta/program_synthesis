@@ -487,9 +487,31 @@ class SumTrace(SummarizationTrace):
     def summarize_traces(self, traces, weights):
         return (traces * weights.unsqueeze(-1)).sum(0)
 
+class AttentionTrace(SummarizationTrace):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.attention_module = nn.Sequential(
+            nn.Linear(self.grid_dim, self.grid_dim),
+            nn.ReLU(),
+            nn.Linear(self.grid_dim, self.grid_dim),
+            nn.ReLU(),
+            nn.Linear(self.grid_dim, 1)
+        )
+
+    def trace_for_no_token(self):
+        return torch.zeros(self.grid_dim)
+
+    def summarize_traces(self, traces, weights):
+        attn_weights = self.attention_module(traces).squeeze(-1).softmax(0)
+        return (attn_weights.unsqueeze(-1) * traces).sum(0)
 
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2, graph_conv_trace=False, graph_conv_trace_layers=2):
+    def __init__(self,
+            grid_encoder_channels=64,
+            conv_all_grids=False,
+            rnn_trace=False, rnn_trace_layers=2,
+            graph_conv_trace=False, graph_conv_trace_layers=2,
+            attention_trace=False):
         """
         grid_encoder_channels: the number of channels to use in the conv
         conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
@@ -502,8 +524,13 @@ class AugmentWithTrace(nn.Module):
         else:
             self.trace_lstm = lambda x: x
 
+
+        assert not graph_conv_trace or not attention_trace, "cannot be both graph conv and attention trace"
+
         if graph_conv_trace:
             trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers)
+        elif attention_trace:
+            trace_incorporator_cls = AttentionTrace
         else:
             trace_incorporator_cls = SumTrace
         self.trace_incorporator = trace_incorporator_cls(256, self.grid_enc.output_size)
