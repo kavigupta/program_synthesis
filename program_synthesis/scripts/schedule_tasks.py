@@ -61,6 +61,8 @@ class TaskRunner:
                     break
                 self.step()
         finally:
+            self.pbar.close()
+            print("Terminating")
             for _, _, proc in tqdm.tqdm(list(self.current_processes.values())):
                 proc.kill()
 
