@@ -461,7 +461,7 @@ class SummarizationTrace(nn.Module, ABC):
             sum_traces = []
             for i in range(prog_len):
                 if not trace_indices[i]:
-                    zeros = self.summarize_emtpy_set_of_traces()
+                    zeros = self.trace_for_no_token()
                     if trace_embed.ps.data.is_cuda:
                         zeros = zeros.cuda()
                     sum_traces.append(Variable(zeros))
