@@ -3,6 +3,7 @@ import GPUtil
 from time import sleep
 import subprocess
 import tqdm
+import tempfile
 import os
 
 def every(seconds):
@@ -12,8 +13,9 @@ def every(seconds):
 
 def run_on_gpu(gpu, task):
     command = "CUDA_VISIBLE_DEVICES={} {}".format(gpu, task)
-    proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, shell=os.environ['SHELL'])
-    return command, proc
+    file = tempfile.TemporaryFile()
+    proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=file, shell=os.environ['SHELL'])
+    return command, file, proc
 
 class TaskRunner:
     def __init__(self, tasks, *, max_memory):
@@ -24,12 +26,13 @@ class TaskRunner:
         self.max_memory = max_memory
 
     def handle_done(self):
-        for gpu, (name, proc) in list(self.current_processes.items()):
+        for gpu, (name, file, proc) in list(self.current_processes.items()):
             retcode = proc.poll()
             if retcode is not None:
                 if retcode != 0:
                     print("Process failed: ", name)
-                    print(proc.stderr.read().decode('utf-8'))
+                    file.seek(0)
+                    print(file.read().decode('utf-8'))
                 del self.current_processes[gpu]
                 self.pbar.update()
 
@@ -58,7 +61,7 @@ class TaskRunner:
                     break
                 self.step()
         finally:
-            for _, proc in self.current_processes.values():
+            for _, _, proc in tqdm.tqdm(list(self.current_processes.values())):
                 proc.kill()
 
 def run_tasks(tasks, **kwargs):
