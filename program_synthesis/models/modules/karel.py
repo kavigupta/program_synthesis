@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+
 import collections
 import functools
 
@@ -425,7 +427,7 @@ class TraceGraphConv(nn.Module):
     def output_embedding_size(self):
         return self.dim * 2
 
-class SumTrace(nn.Module):
+class SummarizationTrace(nn.Module, ABC):
     def __init__(self, program_dim, grid_dim):
         super().__init__()
         self.program_dim = program_dim
@@ -435,11 +437,13 @@ class SumTrace(nn.Module):
         all_sum_traces = self.summarize_trace_per_token(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
 
+    @abstractmethod
     def trace_for_no_token(self):
-        return torch.zeros(self.grid_dim)
+        pass
 
+    @abstractmethod
     def summarize_traces(self, traces, weights):
-        return (traces * weights.unsqueeze(-1)).sum(0)
+        pass
 
     def summarize_trace_per_token(self, trace_embed, trace_events, program_lengths):
         all_sum_traces = []
@@ -474,6 +478,14 @@ class SumTrace(nn.Module):
     @property
     def output_embedding_size(self):
         return self.program_dim + self.grid_dim
+
+
+class SumTrace(SummarizationTrace):
+    def trace_for_no_token(self):
+        return torch.zeros(self.grid_dim)
+
+    def summarize_traces(self, traces, weights):
+        return (traces * weights.unsqueeze(-1)).sum(0)
 
 
 class AugmentWithTrace(nn.Module):
