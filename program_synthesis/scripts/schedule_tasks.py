@@ -39,7 +39,7 @@ class TaskRunner:
 
     def valid_gpu(self):
         open_gpus = set(GPUtil.getAvailable(limit=float('inf'), maxMemory=self.max_memory))
-        valid_gpus = open_gpus - set(self.current_processes) - {0}
+        valid_gpus = open_gpus - set(self.current_processes)
         if valid_gpus:
             return list(valid_gpus)[0]
         return None
