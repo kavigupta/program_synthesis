@@ -432,8 +432,38 @@ class SumTrace(nn.Module):
         self.grid_dim = grid_dim
 
     def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
-        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
+        all_sum_traces = self.produce_sum_trace(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
+
+    def produce_sum_trace(self, trace_embed, trace_events, program_lengths):
+        all_sum_traces = []
+        for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
+            # traces_Per_program_token[i] == (trace indices, weights)
+            trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
+            weights = collections.defaultdict(list)
+            for test_idx, test in enumerate(item):
+                for trace_idx, (start, end), _ in test:
+                    for i in range(start, end + 1):
+                        # assert trace_idx > 0
+                        trace_indices[i].append((test_idx, trace_idx - 1))
+                        weights[i].append(1 / (end + 1 - start))
+
+            sum_traces = []
+            for i in range(prog_len):
+                if not trace_indices[i]:
+                    zeros = torch.zeros(trace_embed.ps.data.shape[-1])
+                    if trace_embed.ps.data.is_cuda:
+                        zeros = zeros.cuda()
+                    sum_traces.append(Variable(zeros))
+                    continue
+                traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
+                weights_for_this = Variable(torch.FloatTensor(weights[i]))
+                if traces_for_token.is_cuda:
+                    weights_for_this = weights_for_this.cuda()
+                sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
+
+            all_sum_traces.append(torch.stack(sum_traces, dim=0))
+        return all_sum_traces
 
     @property
     def output_embedding_size(self):
@@ -521,36 +551,6 @@ class CodeEncoder(nn.Module):
         return SequenceMemory(
                 inp_embed.with_new_ps(output),
                 state)
-
-def produce_sum_trace(trace_embed, trace_events, program_lengths):
-    all_sum_traces = []
-    for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
-        # traces_Per_program_token[i] == (trace indices, weights)
-        trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
-        weights = collections.defaultdict(list)
-        for test_idx, test in enumerate(item):
-            for trace_idx, (start, end), _ in test:
-                for i in range(start, end + 1):
-                    # assert trace_idx > 0
-                    trace_indices[i].append((test_idx, trace_idx - 1))
-                    weights[i].append(1 / (end + 1 - start))
-
-        sum_traces = []
-        for i in range(prog_len):
-            if not trace_indices[i]:
-                zeros = torch.zeros(trace_embed.ps.data.shape[-1])
-                if trace_embed.ps.data.is_cuda:
-                    zeros = zeros.cuda()
-                sum_traces.append(Variable(zeros))
-                continue
-            traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
-            weights_for_this = Variable(torch.FloatTensor(weights[i]))
-            if traces_for_token.is_cuda:
-                weights_for_this = weights_for_this.cuda()
-            sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
-
-        all_sum_traces.append(torch.stack(sum_traces, dim=0))
-    return all_sum_traces
 
 def trace_overall_index(batch_idx, test_time_indices):
     """
