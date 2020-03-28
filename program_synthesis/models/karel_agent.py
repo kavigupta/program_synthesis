@@ -27,7 +27,7 @@ lmbda = 0.95
 EPISLON = 0.1
 ALPHA = 0.7
 
-StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths'])
+StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths', 'acc'])
 
 
 #  https://arxiv.org/pdf/1511.04143.pdf
@@ -105,6 +105,19 @@ class KarelEditEnv(object):
                 rewards.append(reward)
 
         return rewards
+
+    def compute_acc_edits(self, ground_truth_edits, generated_edits):
+        correct_edits = 0
+        actual_edits = 0
+        for i in range(len(ground_truth_edits)):
+            if ground_truth_edits[i]> 3:
+                    actual_edits += 1
+            if ground_truth_edits[i] == generated_edits[i]:
+                if ground_truth_edits[i]> 3:
+                    correct_edits += 1
+        if actual_edits<1:
+            actual_edits = 1
+        return correct_edits/actual_edits
 
     def edit_space_to_code_space(self, edit_codes, code_seqs, lengths):
         
@@ -185,6 +198,12 @@ class KarelEditEnv(object):
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
+        # sort_to_orig: list of integers, satisfies the following:
+        #   [lists_sorted[i] for i in sort_to_orig] == lists
+
+        # Sort code_seqs such that they match with the new states
+        #code_seqs = torch.stack([code_seqs[i] for i in ref_code.orig_to_sort])
+
 
         lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
 
@@ -193,6 +212,9 @@ class KarelEditEnv(object):
         ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
                 v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
 
+        print(ref_code.orig_to_sort)
+        # Remove <s> and </s> from ref code such that it may be predicted
+        # self.vocab._rev_vocab
         ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
 
         dec_data_new = self.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
@@ -205,17 +227,25 @@ class KarelEditEnv(object):
         # Update they don't becuase the SL model doesn't even have traces: they are equal to none :/
         experience = []
         success = False
+        mean_acc = []
         for _ in range(max_rollout_length):
-            # And here when the code_encoder is used 
+            # And here when the code_encoder is used
+            print(state.code_seqs) 
+            print(state.ref_code.ps.data)
+            print(state.ref_code.ps.batch_sizes) 
+            print(state.ref_code.orig_to_sort)
+            print(state.orig_examples)
             action = agent.select_action(state, return_true_code=True )
-            new_state, reward, done, _ = self.step(action)
-            experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4]))
+            new_state, reward, done, acc = self.step(action)
+            experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4], acc))
             new_state = self.update_states(state, new_state)
             state = new_state
+            mean_acc.append(acc)
             #if done:
             #    success = True
             #    break
-        return success, experience
+        
+        return np.mean(np.array(mean_acc)), experience
 
 
     def step(self, action):
@@ -225,12 +255,21 @@ class KarelEditEnv(object):
 
         actions = torch.argmax(probs,dim=1)
 
+        # (*) Remove me, check if label corresponds to edit_ops
+        print('further')
+        print(code_seq)
+        print(labels)
+
+        acc = self.compute_acc_edits(labels, actions)
+        # Instead of length it should take in ref_code orig_to_sort and ref_code.batch_sizes, becuase the labels are in the 
+        # mix match format, and so are the actions?(chekck up) and they must be matched so (true)
         reward = self.compute_reward(labels, actions, lengths, simple=True)
 
+        # Similarly the next states should also be modified in this fasion
         next_state = self.edit_space_to_code_space(actions, code_seq, lengths)
 
         #obs, reward, done, info = self._cur_env.step(action)
-        return next_state, reward, True, {}
+        return next_state, reward, True, acc
 
 
 class KarelEditPolicy(nn.Module):
@@ -350,8 +389,8 @@ def rollout(env, state, agent, epsilon_greedy, max_rollout_length):
     for _ in range(max_rollout_length):
         # And here when the code_encoder is used 
         action = agent.select_action(state, return_true_code=True )
-        new_state, reward, done, _ = env.step(action)
-        experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4]))
+        new_state, reward, done, acc = env.step(action)
+        experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4], acc))
         if done:
             success = True
             break
@@ -564,7 +603,7 @@ class PolicyTrainer(object):
 
             value_preds_batch__origs[i] = value_preds_batch.view(-1)
 
-        state_ = self.update_states(batch[-1][0], new_state)
+        state_ = self.env.update_states(batch[-1][0], new_state)
 
         value_loss_epoch = 0
         action_loss_epoch = 0
@@ -781,6 +820,7 @@ class PolicyTrainer(object):
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         runner = 0
         cum_reward = 0
+        print('start')
         for epoch in range(self.args.num_epochs):
             
             for i, batch in enumerate(self.env.dataset_loader):
@@ -795,6 +835,7 @@ class PolicyTrainer(object):
                 print('training/value_loss {}'.format(loss[1]))
                 print('training/entropy {}'.format(loss[2]))
                 print('training/reward {}'.format(loss[3]))
+                print('acc {}'.format(_))
                 cum_reward += loss[3]
                 print('training/cummulative_reward {}'.format(cum_reward))
                 writer.add(runner,'training/action_loss', loss[0])
