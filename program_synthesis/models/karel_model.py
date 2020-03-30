@@ -501,11 +501,13 @@ class KarelLGRLRefineBatchProcessor(object):
                 ref_code)
 
     def compute_edit_ops_no_char(self, batch, code_seqs, ref_code):
-
+        #print([self.vocab._rev_vocab[int(token)] for cd in code_seqs for token in cd if token > 0])
         edit_lists = []
         for batch_idx, item in enumerate(zip(batch,code_seqs)):
-            code_sequence = list(np.array(item[1])[np.array(item[1])>0])
-            ref_example_code_sequence = list(np.array(item[0])[np.array(item[0])>0])
+            # Removed the previously made sos token and end token
+            code_sequence = list(np.array(item[1])[np.array(item[1])>-1]) #-1])[1:-1]
+            # Double 
+            ref_example_code_sequence = list(np.array(item[0])[np.array(item[0])>-1])
             edit_ops =  list(
                     edit.compute_edit_ops_no_stoi(ref_example_code_sequence,
                         code_sequence))

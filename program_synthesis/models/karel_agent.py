@@ -51,26 +51,6 @@ class KarelEditEnv(object):
  
         return example
 
-    def prepare_tasks(self, tasks):
-        input_grids = torch.cat([t[0] for t in tasks], dim=0)
-        output_grids = torch.cat([t[1] for t in tasks], dim=0)
-        return (input_grids, output_grids)
-
-    def prepare_states(self, states):
-        return torch.cat(states, dim=0)
-
-    def prepare_obs(self, obs):
-        #current_code = prepare_spec.lists_padding_to_tensor(
-        #    [obs['code']], self.vocab.stoi, cuda=False, volatile=True
-        #)
-        
-        current_code = prepare_spec.lists_to_packed_sequence(
-             [obs['code']], self.vocab.stoi, cuda=False, volatile=True)
-        return current_code
-
-    def prepare_actions(self, actions):
-        return actions
-
     def compute_reward(self, ground_truth_edits, generated_edits, lengths, simple=True):
         rewards = []
 
@@ -184,6 +164,67 @@ class KarelEditEnv(object):
 
         return next_states
 
+    def edit_space_to_code_space_special_order(self, edit_codes, code_seqs, batches, order):
+        
+        def new_token(idx, edit_token, code_seq):
+            #(*) make this guy
+            #    0: <s>
+            #   1: </s>
+            #   2: keep
+            #   3: delete
+            #   4: insert vocab 0
+            #   5: replace vocab 0
+            #   6: insert vocab 1
+            #   7: replace vocab 1
+            if edit_token == 0:
+                return 0, code_seq, idx
+            if edit_token == 1:
+                return 1, code_seq, idx
+            if edit_token == 2:
+                op = 'keep'
+            if edit_token == 3:
+                op = 'delete'
+            if edit_token%2 == 0:
+                op = 'insert'
+            if edit_token%2 != 0:
+                op = 'replace'
+            
+            computed_token = int(np.floor((edit_token.item() - 4)/2))
+            if op == 'keep':
+                return int(code_seq[idx]), code_seq, idx+1
+            if op == 'delete':
+                if idx==0:
+                    return None, code_seq[1:], idx
+                code_seq = code_seq[:idx-1] + code_seq[idx:]
+                return None, code_seq, idx
+            if op == 'insert':
+                code_seq = torch.cat((code_seq[:idx],torch.tensor([computed_token]),code_seq[idx:]))
+                return int(code_seq[idx]), code_seq, idx+1
+            if op == 'replace':
+                if idx >= len(code_seq):
+                    return None, code_seq
+                code_seq[idx] = computed_token
+                return int(computed_token), code_seq, idx
+        
+        idxs = [0 for i in order]
+        next_states = [[] for i in order]
+        code_seqs = list(code_seqs)
+        for b in batches:
+            order_step = order[:b]
+            for i in order_step:
+                value, code_seq, update = new_token(idxs[i], edit_codes[i+idxs[i]], code_seqs[i])
+                code_seqs[i] = code_seq
+                idxs[i] = update
+                if value != None:
+                    next_states[i].append(value)
+        for i in order:
+            if idxs[i] < len(code_seqs[i]):
+                for j in range(idxs[i], len(code_seqs[i])):
+                    if int(code_seqs[i][j])>-1:
+                        next_states[i].append(int(code_seqs[i][j]))
+
+        return next_states
+
     def update_states(self, states, new_states):
 
         def list_length(new_states):
@@ -198,12 +239,6 @@ class KarelEditEnv(object):
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
-        # sort_to_orig: list of integers, satisfies the following:
-        #   [lists_sorted[i] for i in sort_to_orig] == lists
-
-        # Sort code_seqs such that they match with the new states
-        #code_seqs = torch.stack([code_seqs[i] for i in ref_code.orig_to_sort])
-
 
         lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
 
@@ -212,10 +247,7 @@ class KarelEditEnv(object):
         ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
                 v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
 
-        print(ref_code.orig_to_sort)
-        # Remove <s> and </s> from ref code such that it may be predicted
-        # self.vocab._rev_vocab
-        ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
+        #ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor(ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
 
         dec_data_new = self.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
         
@@ -229,24 +261,15 @@ class KarelEditEnv(object):
         success = False
         mean_acc = []
         for _ in range(max_rollout_length):
-            # And here when the code_encoder is used
-            print(state.code_seqs) 
-            print(state.ref_code.ps.data)
-            print(state.ref_code.ps.batch_sizes) 
-            print(state.ref_code.orig_to_sort)
-            print(state.orig_examples)
             action = agent.select_action(state, return_true_code=True )
+            # Reward is calculated correct, however it should not split in chucks but in the weird order.
             new_state, reward, done, acc = self.step(action)
             experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4], acc))
             new_state = self.update_states(state, new_state)
             state = new_state
             mean_acc.append(acc)
-            #if done:
-            #    success = True
-            #    break
         
         return np.mean(np.array(mean_acc)), experience
-
 
     def step(self, action):
         #(*) labels are for some reason very similar to gen results after 6 minutes..
@@ -255,30 +278,26 @@ class KarelEditEnv(object):
 
         actions = torch.argmax(probs,dim=1)
 
-        # (*) Remove me, check if label corresponds to edit_ops
-        print('further')
-        print(code_seq)
-        print(labels)
-
         acc = self.compute_acc_edits(labels, actions)
         # Instead of length it should take in ref_code orig_to_sort and ref_code.batch_sizes, becuase the labels are in the 
         # mix match format, and so are the actions?(chekck up) and they must be matched so (true)
         reward = self.compute_reward(labels, actions, lengths, simple=True)
 
         # Similarly the next states should also be modified in this fasion
-        next_state = self.edit_space_to_code_space(actions, code_seq, lengths)
+        next_state = self.edit_space_to_code_space_special_order(actions, code_seq, lengths[0], lengths[1])
 
         #obs, reward, done, info = self._cur_env.step(action)
         return next_state, reward, True, acc
 
 
 class KarelEditPolicy(nn.Module):
-    def __init__(self, vocab_size, args):
+    def __init__(self, args):
         super(KarelEditPolicy, self).__init__()
         self.args = args
 
         set_vocab(args)
         self.model = get_model(args)
+        torch.backends.cudnn.enabled = False
 
     def encode(self, input_grid, output_grid):
         return self.model.model.encoder(input_grid,output_grid)
@@ -318,7 +337,7 @@ class KarelEditPolicy(nn.Module):
         logits, labels, dec_output, lengths = self.decode(io_embed, ref_code_memory,
                                            ref_trace_memory, code_seqs,
                                            dec_data)
-        
+
         if not self.args.use_code_level_state:
             return logits, labels, dec_output, lengths
         else:
@@ -329,7 +348,7 @@ class KarelAgent(object):
 
     def __init__(self, env, args):
         self.vocab = env.vocab
-        self.model = KarelEditPolicy(30, args)
+        self.model = KarelEditPolicy(args)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
         if not args.use_code_level_state:
@@ -353,9 +372,9 @@ class KarelAgent(object):
 
         values = self.critic(dec_output)
         if return_true_code:
-            return labels, probs, states[2], values, lengths
+            return labels, probs, states[2], values, (states[4].ps.batch_sizes,states[4].orig_to_sort)
         else:
-            return labels, probs, [], values, lengths
+            return labels, probs, [], values, (states[4].ps.batch_sizes,states[4].orig_to_sort)
 
 class ReplayBuffer(object):
 
@@ -418,34 +437,6 @@ class PolicyTrainer(object):
             targets[idx] = Q_s_a + ALPHA * (new_Q_s_a - Q_s_a)
         self.critic.train(tasks, states, actions, targets)
 
-    def update_states(self, states, new_states):
-
-        def list_length(new_states):
-
-            lengths_lst = []
-            for i in range(len(new_states)):
-                lengths_lst.append(len(new_states[i]))
-
-            return lengths_lst
-
-        input_grids, output_grids, code_seqs, \
-            dec_data, ref_code, ref_trace_grids,\
-                ref_trace_events, cag_interleave, orig_examples = states
-
-
-        lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
-
-        v = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(lists_sorted, 0), False, False)
-        lens = prepare_spec.lengths(lists_sorted)
-        ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
-                v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
-
-        ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
-
-        dec_data_new = self.env.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
-        
-        return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
-    
     def batchify(self, values, action_log_probs, adv_targ, _, lengths):
 
         start,end = 0,0
@@ -565,6 +556,22 @@ class PolicyTrainer(object):
         self.actor_critic.optimizer.step()
         return
 
+    def special_order_to_batch(self, value, batches, order, action='sum'):
+
+        value_batch = [[] for i in order ]
+        idxs = [0 for i in order]
+        for b in batches:
+            order_step = order[:b]
+            for i in order_step:
+                value_batch[i].append(value[idxs[i]+i])
+        for i in order:
+            value_batch[i] = torch.stack(value_batch[i])
+            if action == 'sum':
+                value_batch[i] = value_batch[i].sum()
+            else:
+                value_batch[i] = value_batch[i].mean()
+        return torch.stack(value_batch)
+
     def action_batch(self, action_log_probs, lengths):
         
         start,end = 0,0
@@ -582,7 +589,6 @@ class PolicyTrainer(object):
         return torch.zeros(self.args.max_rollout_length, self.args.batch_size).cuda() if self.args.cuda else torch.zeros(self.args.max_rollout_length, self.args.batch_size)
 
     def Program_PPO_update(self, batch):
-        
         # store data
         pi_old = self.initialise_rollout_batch()
         reward_s =  self.initialise_rollout_batch()
@@ -591,15 +597,19 @@ class PolicyTrainer(object):
         # Fetch stored rollout data
         for i in range(len(batch)):
 
-            old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths = batch[i][1:]
+            old_action_log_probs_batch, reward, new_state, value_preds_batch, lengths, acc = batch[i][1:]
             
             get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
 
             reward = torch.cuda.FloatTensor(reward) if self.args.cuda else torch.FloatTensor(reward)
 
-            prob_a, _, reward_ = self.prepare_ppo_batch(lengths, get_action_log_probs, get_action_log_probs.view(-1), reward)
+            reward = self.special_order_to_batch(reward, lengths[0], lengths[1], 'mean')
+
+            prob_a = self.special_order_to_batch(get_action_log_probs.view(-1), lengths[0], lengths[1], 'sum')
+
+            #prob_a, _, reward_ = self.prepare_ppo_batch(lengths, get_action_log_probs, get_action_log_probs.view(-1), reward)
             pi_old[i] = prob_a
-            reward_s[i] = reward_
+            reward_s[i] = reward
 
             value_preds_batch__origs[i] = value_preds_batch.view(-1)
 
@@ -616,11 +626,13 @@ class PolicyTrainer(object):
             pi_a = self.initialise_rollout_batch()
             dist_entropy =  self.initialise_rollout_batch()
 
-            # run over rolloout
+            # run over rollout
             for idx, b in enumerate(batch):
                 labels, probs, _, value, _ = self.actor_critic.select_action(b[0],return_true_code=False)
+
                 values[idx]=value.view(-1)
 
+                # (*) Contnue here to sort probs !!!
                 # get log probs and entropy
                 action_log_probs = torch.log(probs)
 
@@ -629,8 +641,10 @@ class PolicyTrainer(object):
                 dist_entropy[idx] = m.entropy().mean()
 
                 action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(probs,dim=1).view(-1,1))
+
+                pi_new = self.special_order_to_batch(action_log_probs.view(-1), _[0], _[1], 'sum')
                 
-                pi_new = self.action_batch(action_log_probs, _)
+                #pi_new = self.action_batch(action_log_probs, _)
                 pi_a[idx] = pi_new
 
             dist_entropy = dist_entropy.mean()
@@ -638,6 +652,7 @@ class PolicyTrainer(object):
             # calculate essential values
             v_prime = values[1:]
             labels, probs, _, value, _ = self.actor_critic.select_action(state_,return_true_code=False)
+
             v_prime = torch.cat((v_prime,value.view(1,-1)))
 
             td_target = v_prime * DISCOUNT
@@ -820,9 +835,7 @@ class PolicyTrainer(object):
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         runner = 0
         cum_reward = 0
-        print('start')
         for epoch in range(self.args.num_epochs):
-            
             for i, batch in enumerate(self.env.dataset_loader):
             #for i in range(self.args.num_episodes):
                 with torch.no_grad():
@@ -835,14 +848,16 @@ class PolicyTrainer(object):
                 print('training/value_loss {}'.format(loss[1]))
                 print('training/entropy {}'.format(loss[2]))
                 print('training/reward {}'.format(loss[3]))
-                print('acc {}'.format(_))
+                print('training/acc {}'.format(_))
                 cum_reward += loss[3]
                 print('training/cummulative_reward {}'.format(cum_reward))
-                writer.add(runner,'training/action_loss', loss[0])
-                writer.add(runner,'training/value_loss', loss[1])
-                writer.add(runner,'training/entropy', loss[2])
-                writer.add(runner,'training/reward', loss[3])
-                writer.add(runner,'training/cummulative_reward', cum_reward)
+                #writer.add(runner,'training/action_loss', loss[0])
+                #writer.add(runner,'training/value_loss', loss[1])
+                #writer.add(runner,'training/entropy', loss[2])
+                #writer.add(runner,'training/reward', loss[3])
+                #writer.add(runner,'training/cummulative_reward', cum_reward)
+                #writer.add(runner,'training/acc', _)
+
                 #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):
@@ -857,6 +872,8 @@ class PolicyTrainer(object):
 def main():
 
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
+
+    torch.backends.cudnn.enabled = False
 
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
