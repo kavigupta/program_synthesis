@@ -25,7 +25,7 @@ for logdir in glob.glob('logdirs/**/*', recursive=True):
                         # print(output_path, file=sys.stderr)
                         continue
                 print(
-                    ('python program_synthesis/eval.py --model_type karel-lgrl-ref '
+                    ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref '
                      '--dataset karel --max_beam_trees 64 --step {step} '
                      '--karel-mutate-ref --karel-mutate-n-dist {dist} '
                      '--model_dir {logdir} '

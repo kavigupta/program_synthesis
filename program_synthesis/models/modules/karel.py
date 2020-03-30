@@ -1,3 +1,5 @@
+from abc import ABC, abstractmethod
+
 import collections
 import functools
 
@@ -425,23 +427,91 @@ class TraceGraphConv(nn.Module):
     def output_embedding_size(self):
         return self.dim * 2
 
-class SumTrace(nn.Module):
+class SummarizationTrace(nn.Module, ABC):
     def __init__(self, program_dim, grid_dim):
         super().__init__()
         self.program_dim = program_dim
         self.grid_dim = grid_dim
 
     def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
-        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
+        all_sum_traces = self.summarize_trace_per_token(trace_embed, trace_events, program_lengths)
         return inp_embed.cat_with_list(all_sum_traces)
+
+    @abstractmethod
+    def trace_for_no_token(self):
+        pass
+
+    @abstractmethod
+    def summarize_traces(self, traces, weights):
+        pass
+
+    def summarize_trace_per_token(self, trace_embed, trace_events, program_lengths):
+        all_sum_traces = []
+        for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
+            # traces_Per_program_token[i] == (trace indices, weights)
+            trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
+            weights = collections.defaultdict(list)
+            for test_idx, test in enumerate(item):
+                for trace_idx, (start, end), _ in test:
+                    for i in range(start, end + 1):
+                        # assert trace_idx > 0
+                        trace_indices[i].append((test_idx, trace_idx - 1))
+                        weights[i].append(1 / (end + 1 - start))
+
+            sum_traces = []
+            for i in range(prog_len):
+                if not trace_indices[i]:
+                    zeros = self.trace_for_no_token()
+                    if trace_embed.ps.data.is_cuda:
+                        zeros = zeros.cuda()
+                    sum_traces.append(Variable(zeros))
+                    continue
+                traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
+                weights_for_this = Variable(torch.FloatTensor(weights[i]))
+                if traces_for_token.is_cuda:
+                    weights_for_this = weights_for_this.cuda()
+                sum_traces.append(self.summarize_traces(traces_for_token, weights_for_this))
+
+            all_sum_traces.append(torch.stack(sum_traces, dim=0))
+        return all_sum_traces
 
     @property
     def output_embedding_size(self):
         return self.program_dim + self.grid_dim
 
 
+class SumTrace(SummarizationTrace):
+    def trace_for_no_token(self):
+        return torch.zeros(self.grid_dim)
+
+    def summarize_traces(self, traces, weights):
+        return (traces * weights.unsqueeze(-1)).sum(0)
+
+class AttentionTrace(SummarizationTrace):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.attention_module = nn.Sequential(
+            nn.Linear(self.grid_dim, self.grid_dim),
+            nn.ReLU(),
+            nn.Linear(self.grid_dim, self.grid_dim),
+            nn.ReLU(),
+            nn.Linear(self.grid_dim, 1)
+        )
+
+    def trace_for_no_token(self):
+        return torch.zeros(self.grid_dim)
+
+    def summarize_traces(self, traces, weights):
+        attn_weights = self.attention_module(traces).squeeze(-1).softmax(0)
+        return (attn_weights.unsqueeze(-1) * traces).sum(0)
+
 class AugmentWithTrace(nn.Module):
-    def __init__(self, grid_encoder_channels=64, conv_all_grids=False, rnn_trace=False, rnn_trace_layers=2, graph_conv_trace=False, graph_conv_trace_layers=2):
+    def __init__(self,
+            grid_encoder_channels=64,
+            conv_all_grids=False,
+            rnn_trace=False, rnn_trace_layers=2,
+            graph_conv_trace=False, graph_conv_trace_layers=2,
+            attention_trace=False):
         """
         grid_encoder_channels: the number of channels to use in the conv
         conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
@@ -454,8 +524,13 @@ class AugmentWithTrace(nn.Module):
         else:
             self.trace_lstm = lambda x: x
 
+
+        assert not graph_conv_trace or not attention_trace, "cannot be both graph conv and attention trace"
+
         if graph_conv_trace:
             trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers)
+        elif attention_trace:
+            trace_incorporator_cls = AttentionTrace
         else:
             trace_incorporator_cls = SumTrace
         self.trace_incorporator = trace_incorporator_cls(256, self.grid_enc.output_size)
@@ -521,36 +596,6 @@ class CodeEncoder(nn.Module):
         return SequenceMemory(
                 inp_embed.with_new_ps(output),
                 state)
-
-def produce_sum_trace(trace_embed, trace_events, program_lengths):
-    all_sum_traces = []
-    for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
-        # traces_Per_program_token[i] == (trace indices, weights)
-        trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
-        weights = collections.defaultdict(list)
-        for test_idx, test in enumerate(item):
-            for trace_idx, (start, end), _ in test:
-                for i in range(start, end + 1):
-                    # assert trace_idx > 0
-                    trace_indices[i].append((test_idx, trace_idx - 1))
-                    weights[i].append(1 / (end + 1 - start))
-
-        sum_traces = []
-        for i in range(prog_len):
-            if not trace_indices[i]:
-                zeros = torch.zeros(trace_embed.ps.data.shape[-1])
-                if trace_embed.ps.data.is_cuda:
-                    zeros = zeros.cuda()
-                sum_traces.append(Variable(zeros))
-                continue
-            traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
-            weights_for_this = Variable(torch.FloatTensor(weights[i]))
-            if traces_for_token.is_cuda:
-                weights_for_this = weights_for_this.cuda()
-            sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
-
-        all_sum_traces.append(torch.stack(sum_traces, dim=0))
-    return all_sum_traces
 
 def trace_overall_index(batch_idx, test_time_indices):
     """
@@ -1255,7 +1300,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         # insertion only.
         # In all cases, don't allow <s>.
         # Positions where mask is 1 will get -inf as the logit.
-        self.end_mask = torch.ByteTensor([
+        self.end_mask = torch.BoolTensor([
             [1] + [0] * (num_ops - 1),
             # <s>, </s>, keep, delete
             np.concatenate(([1, 0, 1, 1],  self.increment_source_loc[4:])).tolist()
