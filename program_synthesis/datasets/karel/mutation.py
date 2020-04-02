@@ -8,6 +8,7 @@ import numpy as np
 
 from ..dataset import executor
 from . import parser_for_synthesis
+from ..karel import KarelForSynthesisParser, KarelSyntaxError
 
 # Tree structure
 # - run: body
@@ -332,13 +333,23 @@ class KarelIncorrectExampleMutator(object):
     def __init__(self, results_file, add_trace):
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
+        self.parser = KarelForSynthesisParser()
         with open(results_file) as f:
             examples = json.load(f)
-        self.is_corrects = [x['is_correct'] for x in examples]
-        self.negative_examples = [tuple(x['output']) for x in examples if not x['is_correct']]
+        self.to_be_used = [self._used(x) for x in examples]
+        self.negative_examples = [tuple(x['output']) for x, used in zip(examples, self.to_be_used) if used]
+
+    def _used(self, x):
+        if x['is_correct']:
+            return False
+        try:
+            self.parser.parse(tuple(x['output']), debug=False)
+        except KarelSyntaxError:
+            return False
+        return True
 
     def filter_index(self, index):
-        return [idx for i, idx in enumerate(index) if not self.is_corrects[i]]
+        return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
 
     def __call__(self, idx, karel_example):
         assert self.negative_examples[idx]
