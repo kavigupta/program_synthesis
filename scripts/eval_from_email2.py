@@ -3,6 +3,8 @@ import glob, re, os, os.path, json, time
 import sys
 
 for logdir in glob.glob('logdirs/**/*', recursive=True):
+    if "baseline_model" in logdir:
+        continue
     for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
         time_delta = time.time() - os.path.getmtime(ckpt)
         if time_delta < 5 * 60:
