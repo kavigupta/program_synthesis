@@ -375,6 +375,25 @@ def get_program_trace_edges(trace_events, program_itv, trace_itv):
                     edges.append((pi, ti))
     return edges
 
+
+def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv):
+    """
+    Parameters:
+        trace_events: a Spans object representing the events happening during a trace
+        inp_lengths: the lengths of each program
+        inp_itv: a mapping from (program number, number within program) --> vertex
+        trace_lengths: the lengths of each trace
+        trace_itv: a mapping from (trace number, number within trace) --> vertex
+    """
+    program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
+    edges = program_trace
+    edges += [(trace_itv[i, j], trace_itv[i, j + 1]) for i, length in enumerate(trace_lengths) for j in
+              range(length - 1)]
+    edges += [(inp_itv[i, j], inp_itv[i, j + 1]) for i, length in enumerate(inp_lengths) for j in range(length - 1)]
+    edges += [(b, a) for a, b in edges]  # make the graph symmetric
+    return edges
+
+
 class TraceGraphConv(nn.Module):
     def __init__(self, program_dim, grid_dim, layers):
         super().__init__()
@@ -394,15 +413,14 @@ class TraceGraphConv(nn.Module):
         inp_flat, inp_ftn, inp_itv = flatten(inp_embed)
         trace_flat, trace_ftn, trace_ntf = flatten(trace_embed)
 
+        trace_lengths = trace_embed.orig_lengths()
+        inp_lengths = inp_embed.orig_lengths()
+
         vertices = torch.cat([inp_flat, trace_flat], dim=0)
 
         trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
 
-        program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
-        edges = program_trace
-        edges += [(trace_itv[i, j], trace_itv[i, j + 1]) for i, length in enumerate(trace_embed.orig_lengths()) for j in range(length - 1)]
-        edges += [(inp_itv[i, j], inp_itv[i, j + 1]) for i, length in enumerate(inp_embed.orig_lengths()) for j in range(length - 1)]
-        edges += [(b, a) for a, b in edges] # make the graph symmetric
+        edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv)
         edges = torch.tensor(edges).T
         if vertices.is_cuda:
             edges = edges.cuda()
