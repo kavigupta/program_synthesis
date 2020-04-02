@@ -13,7 +13,7 @@ from models import base, prepare_spec
 from .. import beam_search
 from datasets import data
 from .attention import SimpleSDPAttention
-from .gcn_conv import MultiGCNConv
+from .gcn_conv import MultiGCNConv, GGCN
 
 
 def default(value, if_none):
@@ -405,14 +405,30 @@ def generate_sequence_edges(sequence_edge_limit, tag, itv, lengths):
                 edges += [(end, start, (tag, -dist))]
     return edges
 
+def get_edge_types(sequence_edge_limit):
+    edge_types = []
+    edge_types += ['pt', 'tp']
+    for dist in range(1, 1 + sequence_edge_limit):
+        edge_types += [('pp', +dist), ('pp', -dist), ('tt', +dist), ('tt', -dist)]
+    return edge_types
 
 class TraceGraphConv(nn.Module):
-    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit=1):
+    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit=1, ggcn=False, ggcn_multi_edge_types=False):
         super().__init__()
         assert program_dim == grid_dim
+        if ggcn_multi_edge_types:
+            assert ggcn, "to use multiple edge types, you need to use ggcn"
         self.dim = program_dim
-
-        self.multi_conv = MultiGCNConv(self.dim, layers)
+        self.ggcn = ggcn
+        self.ggcn_multi_edge_types = ggcn_multi_edge_types
+        self.sequence_edge_limit = sequence_edge_limit
+        if ggcn:
+            if self.ggcn_multi_edge_types:
+                self.multi_conv = GGCN(self.dim, get_edge_types(sequence_edge_limit), layers)
+            else:
+                self.multi_conv = GGCN(self.dim, None, layers)
+        else:
+            self.multi_conv = MultiGCNConv(self.dim, layers)
 
     def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
 
