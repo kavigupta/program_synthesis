@@ -2,6 +2,7 @@ import collections
 import copy
 import itertools
 import struct
+import json
 
 import numpy as np
 
@@ -326,6 +327,24 @@ class KarelExampleMutator(object):
         new_code = parser_for_synthesis.tree_to_tokens(new_tree)
         return new_code
 
+
+class KarelIncorrectExampleMutator(object):
+    def __init__(self, results_file, add_trace):
+        self.add_trace = add_trace
+        self.executor = executor.KarelExecutor(action_limit=250)
+        with open(results_file) as f:
+            examples = json.load(f)
+        self.is_corrects = [x['is_correct'] for x in examples]
+        self.negative_examples = [tuple(x['output']) for x in examples if not x['is_correct']]
+
+    def filter_index(self, index):
+        return [idx for i, idx in enumerate(index) if not self.is_corrects[i]]
+
+    def __call__(self, idx, karel_example):
+        assert self.negative_examples[idx]
+        result = add_incorrect_code(karel_example, self.negative_examples[idx], self.add_trace, self.executor)
+        assert result.ref_example.code_sequence
+        return result
 
 # Definition of Action Parameters
 
