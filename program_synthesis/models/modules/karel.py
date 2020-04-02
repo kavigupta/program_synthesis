@@ -421,9 +421,6 @@ class TraceGraphConv(nn.Module):
         trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
 
         edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv)
-        edges = torch.tensor(edges).T
-        if vertices.is_cuda:
-            edges = edges.cuda()
 
         vertices = self.multi_conv(vertices, edges)
 

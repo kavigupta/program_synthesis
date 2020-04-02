@@ -50,6 +50,9 @@ class MultiGCNConv(nn.Module):
         self.conv_activation = nn.Sigmoid()
 
     def forward(self, vertices, edges):
+        edges = torch.tensor(edges).T
+        if vertices.is_cuda:
+            edges = edges.cuda()
         for conv in self.convs[:-1]:
             vertices = conv(vertices, edges)
             vertices = self.conv_activation(vertices)
@@ -57,7 +60,7 @@ class MultiGCNConv(nn.Module):
             vertices = self.convs[-1](vertices, edges)
         return vertices
 
-class GGCNLayer(nn.Module):
+class GGCN(nn.Module):
     """
     Gated Graph Convnet as described in https://arxiv.org/pdf/1711.00740.pdf
     """
@@ -71,6 +74,9 @@ class GGCNLayer(nn.Module):
         self.recurrent = nn.GRU(self.dim, self.dim)
 
     def forward(self, embedding, edges):
+        edges = torch.tensor(edges).T
+        if embedding.is_cuda:
+            edges = edges.cuda()
         for _ in range(self.n_steps):
             embedding = self.step(embedding, edges)
         return embedding
