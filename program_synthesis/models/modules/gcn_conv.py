@@ -61,15 +61,21 @@ class GGCNLayer(nn.Module):
     """
     Gated Graph Convnet as described in https://arxiv.org/pdf/1711.00740.pdf
     """
-    def __init__(self, dim, n_edge_types):
+    def __init__(self, dim, n_edge_types, n_steps):
         super().__init__()
         self.dim = dim
         self.n_edge_types = n_edge_types
+        self.n_steps = n_steps
 
         self.emb_to_message = nn.Linear(self.dim, self.dim * self.n_edge_types)
         self.recurrent = nn.GRU(self.dim, self.dim)
 
     def forward(self, embedding, edges):
+        for _ in range(self.n_steps):
+            embedding = self.step(embedding, edges)
+        return embedding
+
+    def step(self, embedding, edges):
         """
         m[n][e] == the nth vertex's eth edge type's emdedding
 
