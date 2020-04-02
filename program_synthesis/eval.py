@@ -35,12 +35,14 @@ def evaluate(args):
     if args.example_id is not None:
         eval_dataset.data = [eval_dataset.task[args.example_id]]
 
-    evaluation.run_eval(
-        args.tag, eval_dataset, m.inference,
-        current_executor.execute, not args.hide_example_info,
-        args.report_path,
-        limit=args.limit)
-
+    if args.run_predict:
+        evaluation.run_predict(eval_dataset, m.inference, current_executor.execute, args.predict_path)
+    else:
+        evaluation.run_eval(
+            args.tag, eval_dataset, m.inference,
+            current_executor.execute, not args.hide_example_info,
+            args.report_path,
+            limit=args.limit)
 
 if __name__ == "__main__":
     parser = arguments.get_arg_parser('Evaluating Text2Code', 'eval')

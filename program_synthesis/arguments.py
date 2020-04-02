@@ -108,6 +108,9 @@ def get_arg_parser(title, mode):
         eval_group.add_argument('--eval-final', action='store_true')
         eval_group.add_argument('--limit', type=int, default=None)
 
+        eval_group.add_argument('--run-predict', action='store_true', default=False)
+        eval_group.add_argument('--predict-path')
+
     infer_group = parser.add_argument_group('infer')
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
     infer_group.add_argument('--max_beam_trees', type=int, default=1)#100

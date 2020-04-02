@@ -5,6 +5,8 @@ import sys
 import time
 import traceback
 import random
+import tqdm
+import os
 
 from datasets import dataset
 from datasets import executor
@@ -137,6 +139,31 @@ class EvalReport(object):
             example, res, st = self.report[-1]
             self.show_example(example, res, st)
 
+
+def run_predict(dataset, inference, do_execute, inference_output_path):
+    """Runs inference of given model on eval set, and executes resulting code.
+
+    Args:
+        tag: str, tag of the run to save report.
+        dataset: Dataset, iterable of CodeExample to evaluate on.
+        inference: func, produces code for given CodeExamples.
+        do_execute: func, runs given code with given arguments.
+        show_info: Show specific example additional information.
+    """
+    assert inference_output_path is not None, "must provide path"
+    assert not os.path.exists(inference_output_path), "must be a path that doesn't exist"
+    assert os.path.isdir(os.path.dirname(inference_output_path)), "parent folder must exist"
+    predictions = []
+    for batch in tqdm.tqdm(dataset):
+        results = inference(batch)
+        for res, example in zip(results, batch.orig_examples):
+            stats = executor.evaluate_code(res.code_sequence, example.schema.args, example.tests, do_execute)
+            predictions.append(dict(
+                output=res.code_sequence,
+                is_correct=stats['correct']
+            ))
+    with open(inference_output_path, "w") as f:
+        json.dump(predictions, f)
 
 def run_eval(tag, dataset, inference, do_execute, show_info=True,
         report_path=None, limit=None):
