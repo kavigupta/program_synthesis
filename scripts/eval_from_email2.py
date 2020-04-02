@@ -25,7 +25,7 @@ for logdir in glob.glob('logdirs/**/*', recursive=True):
                 if os.path.exists(output_path):
                     with open(output_path) as f:
                         res = json.loads(next(f))
-                    if res.get('total', 0) >= 2500:
+                    if res.get('done', res.get('total', 0) >= 2500):
                         # print(output_path, file=sys.stderr)
                         continue
                 if dist:
