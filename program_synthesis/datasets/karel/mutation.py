@@ -281,6 +281,27 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
+def add_incorrect_code(karel_example, new_code, add_trace, executor):
+    from ..dataset import KarelExample
+    assert karel_example.ref_example is None
+    # TODO: Get the real trace
+    new_tests = []
+    if add_trace:
+        for ex in karel_example.input_tests:
+            result = executor.execute(new_code, None, ex['input'],
+                                      record_trace=True, strict=True)
+            new_ex = dict(ex)
+            new_ex['trace'] = result.trace
+            new_tests.append(new_ex)
+    karel_example.ref_example = KarelExample(
+        idx=None,
+        guid=None,
+        code_sequence=new_code,
+        input_tests=new_tests,
+        tests=karel_example.tests)
+    return karel_example
+
+
 class KarelExampleMutator(object):
     def __init__(self, n_dist, rng_fixed, add_trace, probs=None):
         self.n_dist = n_dist / np.sum(n_dist)
@@ -294,33 +315,16 @@ class KarelExampleMutator(object):
         self.executor = executor.KarelExecutor(action_limit=250)
 
     def __call__(self, karel_example):
-        from ..dataset import KarelExample
-        assert karel_example.ref_example is None
+        return add_incorrect_code(karel_example, self.mutate_code(karel_example), self.add_trace, self.executor)
+
+    def mutate_code(self, karel_example):
         tree = self.parser.parse(karel_example.code_sequence)
         if self.rng_fixed:
             self.rng.seed(int(karel_example.guid[:8], base=16))
         n = self.rng.choice(len(self.n_dist), p=self.n_dist) + 1
-
         new_tree = mutate_n(tree, n, self.probs, self.rng, allow_in_place=True)
         new_code = parser_for_synthesis.tree_to_tokens(new_tree)
-
-        # TODO: Get the real trace
-        new_tests = []
-        if self.add_trace:
-            for ex in karel_example.input_tests:
-                result = self.executor.execute(new_code, None, ex['input'],
-                                               record_trace=True, strict=True)
-                new_ex = dict(ex)
-                new_ex['trace'] = result.trace
-                new_tests.append(new_ex)
-
-        karel_example.ref_example = KarelExample(
-            idx=None,
-            guid=None,
-            code_sequence=new_code,
-            input_tests=new_tests,
-            tests=karel_example.tests)
-        return karel_example
+        return new_code
 
 
 # Definition of Action Parameters
