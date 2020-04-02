@@ -62,14 +62,14 @@ class EvalReport(object):
             f.write("</table>\n")
             f.write("</body></html>")
 
-    def save(self):
+    def save(self, done=False):
         if self.report_path:
             report_path = self.report_path
         else:
             timestamp = int(time.time())
             report_path = 'reports/report-%s-%s.json' % (self.tag, timestamp)
         with open(report_path, 'w') as f:
-            f.write(json.dumps(self.stats) + "\n")
+            f.write(json.dumps({**self.stats, 'done' : done}) + "\n")
             for example, res, st in self.report:
                 f.write(json.dumps({
                     "stats": st,
@@ -178,6 +178,7 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
     """
     report = EvalReport(tag=tag, show_info=show_info, report_path=report_path)
     count = 0
+    done = False
     try:
         for batch in dataset:
             if limit is not None and count >= limit:
@@ -193,9 +194,10 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
             print("[Eval] Elapsed time for %d examples: %f" %
                     (len(batch.orig_examples), time.time() - start))
             report.display()
+            done = True
     finally:
         print("Stopped.")
-        report.save()
+        report.save(done)
         report.display()
     
 
