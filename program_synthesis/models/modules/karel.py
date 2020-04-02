@@ -376,7 +376,7 @@ def get_program_trace_edges(trace_events, program_itv, trace_itv):
     return edges
 
 
-def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv):
+def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit):
     """
     Parameters:
         trace_events: a Spans object representing the events happening during a trace
@@ -384,18 +384,30 @@ def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv):
         inp_itv: a mapping from (program number, number within program) --> vertex
         trace_lengths: the lengths of each trace
         trace_itv: a mapping from (trace number, number within trace) --> vertex
+        sequence_edge_limit: the maximum number of hops to connect elements in a sequence (trace or program)
     """
     program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
-    edges = program_trace
-    edges += [(trace_itv[i, j], trace_itv[i, j + 1]) for i, length in enumerate(trace_lengths) for j in
-              range(length - 1)]
-    edges += [(inp_itv[i, j], inp_itv[i, j + 1]) for i, length in enumerate(inp_lengths) for j in range(length - 1)]
-    edges += [(b, a) for a, b in edges]  # make the graph symmetric
+    edges = []
+    edges += [(p, t, 'pt') for p, t in program_trace]
+    edges += [(t, p, 'tp') for p, t in program_trace]
+    edges += generate_sequence_edges(sequence_edge_limit, 'tt', trace_itv, trace_lengths)
+    edges += generate_sequence_edges(sequence_edge_limit, 'pp', inp_itv, inp_lengths)
+    return edges
+
+
+def generate_sequence_edges(sequence_edge_limit, tag, itv, lengths):
+    edges = []
+    for dist in range(1, 1 + sequence_edge_limit):
+        for i, length in enumerate(lengths):
+            for j in range(length - dist):
+                start, end = itv[i, j], itv[i, j + dist]
+                edges += [(start, end, (tag, dist))]
+                edges += [(end, start, (tag, -dist))]
     return edges
 
 
 class TraceGraphConv(nn.Module):
-    def __init__(self, program_dim, grid_dim, layers):
+    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit=1):
         super().__init__()
         assert program_dim == grid_dim
         self.dim = program_dim

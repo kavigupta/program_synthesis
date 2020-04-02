@@ -50,6 +50,7 @@ class MultiGCNConv(nn.Module):
         self.conv_activation = nn.Sigmoid()
 
     def forward(self, vertices, edges):
+        edges = [(u, v) for u, v, _ in edges]
         edges = torch.tensor(edges).T
         if vertices.is_cuda:
             edges = edges.cuda()
@@ -64,16 +65,30 @@ class GGCN(nn.Module):
     """
     Gated Graph Convnet as described in https://arxiv.org/pdf/1711.00740.pdf
     """
-    def __init__(self, dim, n_edge_types, n_steps):
+    def __init__(self, dim, valid_edge_types, n_steps):
         super().__init__()
         self.dim = dim
-        self.n_edge_types = n_edge_types
+        self.n_edge_types = len(valid_edge_types)
+
+        if valid_edge_types is not None:
+            assert len(set(valid_edge_types)) == len(valid_edge_types), "edge types should be unique"
+            self.edge_type_embedding = {k: i for i, k in
+                                        enumerate(sorted(valid_edge_types))}
+        else:
+            self.edge_type_embedding = None
+
         self.n_steps = n_steps
 
         self.emb_to_message = nn.Linear(self.dim, self.dim * self.n_edge_types)
         self.recurrent = nn.GRU(self.dim, self.dim)
 
+    def embed_edge(self, e):
+        if self.edge_type_embedding is not None:
+            return self.edge_type_embedding[e]
+        return 0
+
     def forward(self, embedding, edges):
+        edges = [(u, v, self.embed_edge(e)) for u, v, e in edges]
         edges = torch.tensor(edges).T
         if embedding.is_cuda:
             edges = edges.cuda()
