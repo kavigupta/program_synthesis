@@ -73,7 +73,7 @@ class GGCN(nn.Module):
         if valid_edge_types is not None:
             assert len(set(valid_edge_types)) == len(valid_edge_types), "edge types should be unique"
             self.edge_type_embedding = {k: i for i, k in
-                                        enumerate(sorted(valid_edge_types))}
+                                        enumerate(sorted(valid_edge_types, key=repr))}
         else:
             self.edge_type_embedding = None
 
