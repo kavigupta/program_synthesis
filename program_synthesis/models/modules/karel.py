@@ -448,7 +448,7 @@ class TraceGraphConv(nn.Module):
 
         trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
 
-        edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv)
+        edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit=self.sequence_edge_limit)
 
         vertices = self.multi_conv(vertices, edges)
 
