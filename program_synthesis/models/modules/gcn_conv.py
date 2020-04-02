@@ -80,7 +80,7 @@ class GGCN(nn.Module):
         self.n_steps = n_steps
 
         self.emb_to_message = nn.Linear(self.dim, self.dim * self.n_edge_types)
-        self.recurrent = nn.GRU(self.dim, self.dim)
+        self.gru_cell = nn.GRUCell(self.dim, self.dim)
 
     def embed_edge(self, e):
         if self.edge_type_embedding is not None:
@@ -127,6 +127,6 @@ class GGCN(nn.Module):
         r = torch.zeros_like(embedding)
         r.scatter_add_(0, index, q)
 
-        _, new_embedding = self.recurrent(r, embedding)
+        new_embedding = self.gru_cell(r, embedding)
 
         return new_embedding
