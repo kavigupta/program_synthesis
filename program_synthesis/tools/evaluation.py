@@ -159,7 +159,7 @@ def run_predict(dataset, inference, do_execute, inference_output_path):
         for res, example in zip(results, batch.orig_examples):
             stats = executor.evaluate_code(res.code_sequence, example.schema.args, example.tests, do_execute)
             predictions.append(dict(
-                output=res.code_sequence,
+                output=res.info['candidates'][0],
                 is_correct=stats['correct']
             ))
     with open(inference_output_path, "w") as f:
