@@ -413,7 +413,7 @@ def get_edge_types(sequence_edge_limit):
     return edge_types
 
 class TraceGraphConv(nn.Module):
-    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit=1, ggcn=False, ggcn_multi_edge_types=False):
+    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit, ggcn, ggcn_multi_edge_types):
         super().__init__()
         assert program_dim == grid_dim
         if ggcn_multi_edge_types:
@@ -553,7 +553,8 @@ class AugmentWithTrace(nn.Module):
             grid_encoder_channels=64,
             conv_all_grids=False,
             rnn_trace=False, rnn_trace_layers=2,
-            graph_conv_trace=False, graph_conv_trace_layers=2,
+            graph_conv_trace=False, graph_conv_trace_layers=2, graph_conv_sequence_edge_limit=1,
+            graph_conv_ggcn=False, graph_conv_multi_edge_types=False,
             attention_trace=False):
         """
         grid_encoder_channels: the number of channels to use in the conv
@@ -571,7 +572,10 @@ class AugmentWithTrace(nn.Module):
         assert not graph_conv_trace or not attention_trace, "cannot be both graph conv and attention trace"
 
         if graph_conv_trace:
-            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers)
+            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers,
+                                                       sequence_edge_limit=graph_conv_sequence_edge_limit,
+                                                       ggcn=graph_conv_ggcn,
+                                                       ggcn_multi_edge_types=graph_conv_multi_edge_types)
         elif attention_trace:
             trace_incorporator_cls = AttentionTrace
         else:
