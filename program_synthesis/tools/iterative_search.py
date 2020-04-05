@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 
-from ..datasets.executor import evaluate_code
-from ..datasets.karel import mutation
+from datasets.executor import evaluate_code
+from datasets.karel import mutation
+
+from models.base import InferenceResult
 
 
 class IterativeSearch:
