@@ -165,6 +165,14 @@ def run_predict(dataset, inference, do_execute, inference_output_path):
     with open(inference_output_path, "w") as f:
         json.dump(predictions, f)
 
+def limited(dataset, limit):
+    count = 0
+    for batch in dataset:
+        if limit is not None and count >= limit:
+            break
+        count += batch.input_grids.shape[0]
+        yield batch
+
 def run_eval(tag, dataset, inference, do_execute, show_info=True,
         report_path=None, limit=None):
     """Runs inference of given model on eval set, and executes resulting code.
@@ -177,13 +185,9 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
         show_info: Show specific example additional information.
     """
     report = EvalReport(tag=tag, show_info=show_info, report_path=report_path)
-    count = 0
     done = False
     try:
-        for batch in dataset:
-            if limit is not None and count >= limit:
-                break
-            count += batch.input_grids.shape[0]
+        for batch in limited(dataset, limit):
             start = time.time()
             results = inference(batch)
             for res, example in zip(results, batch.orig_examples):
