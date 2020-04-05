@@ -109,6 +109,8 @@ class GreedyStrategy(Strategy):
             if considered in self.seen:
                 continue
             res = evaluate(considered)
+            if res['syntax-error'] > 0:
+                continue
             if res['correct'] == res['total']:
                 return 'accept', considered
             unseen.append((res['correct'], considered))
