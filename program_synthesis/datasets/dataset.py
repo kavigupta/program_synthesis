@@ -498,8 +498,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator,
-            KarelIncorrectExampleMutator(args.karel_file_ref_train,
-                                         add_trace) if args.karel_file_ref_train is not None else None),
+            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_train, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
@@ -508,13 +507,13 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator(args.karel_file_ref_val,
-                                         add_trace) if args.karel_file_ref_val is not None else None),
+            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2,
         pin_memory=False)
     return train_data, dev_data
+
 
 def get_karel_dataset_nomodel(args, KarelLGRLRefineBatchProcessor=None):
     suffix = args.dataset[5:]
@@ -567,8 +566,7 @@ def get_karel_eval_dataset(args, model):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator(args.karel_file_ref_val,
-                                         add_trace) if args.karel_file_ref_val is not None else None),
+            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2)

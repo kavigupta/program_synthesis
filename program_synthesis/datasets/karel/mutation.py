@@ -339,6 +339,12 @@ class KarelIncorrectExampleMutator(object):
         self.to_be_used = [self._used(x) for x in examples]
         self.negative_examples = [tuple(x['output']) for x, used in zip(examples, self.to_be_used) if used]
 
+    @staticmethod
+    def from_path(karel_ref_file_train, add_trace):
+        if karel_ref_file_train is None:
+            return None
+        return KarelIncorrectExampleMutator(karel_ref_file_train, add_trace)
+
     def _used(self, x):
         if x['is_correct']:
             return False
