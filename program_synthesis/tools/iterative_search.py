@@ -49,6 +49,8 @@ class IterativeSearch:
                    for code, expanded in zip(done, attempts)]
 
     def update_wrong_code_and_pack(self, new_examples, new_wrong_code):
+        assert new_examples
+        assert len(new_examples) == len(new_wrong_code)
         updated_examples = []
         for example, code in zip(new_examples, new_wrong_code):
             updated_examples.append(
