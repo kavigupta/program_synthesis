@@ -283,9 +283,10 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
-def add_incorrect_code(karel_example, new_code, add_trace, executor):
+def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True):
     from ..dataset import KarelExample
-    assert karel_example.ref_example is None
+    if check_ref_example:
+        assert karel_example.ref_example is None
     # TODO: Get the real trace
     new_tests = []
     if add_trace:
