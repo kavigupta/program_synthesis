@@ -17,6 +17,7 @@ class IterativeSearch:
     def __call__(self, batch):
         strategies = [self.init_strategy(item) for item in batch.orig_examples]
         done = [False] * len(batch.orig_examples)
+        attempts = [[] for _ in range(len(batch.orig_examples))]
         index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
         while True:
             results = self.original_inference(batch)
@@ -30,6 +31,7 @@ class IterativeSearch:
                 if decision[0] == 'accept':
                     done[index_mapping[idx]] = decision[1]
                 elif decision[0] == 'expand':
+                    attempts[index_mapping[idx]].append(decision[1])
                     new_wrong_code.append(decision[1])
                     new_batch.append(batch.orig_examples[idx])
                     new_strategies.append(strategies[idx])
@@ -43,7 +45,8 @@ class IterativeSearch:
             index_mapping = new_index_mapping
             strategies = new_strategies
             batch = self.update_wrong_code_and_pack(new_batch, new_wrong_code)
-        return self.original_inference(batch)
+        return [InferenceResult(code_sequence=code, info={'candidates' : [code], 'expanded' : [expanded]})
+                   for code, expanded in zip(done, attempts)]
 
     def update_wrong_code_and_pack(self, new_examples, new_wrong_code):
         updated_examples = []
