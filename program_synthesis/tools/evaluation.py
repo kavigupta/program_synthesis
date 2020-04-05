@@ -193,7 +193,7 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
             print("[Eval] Elapsed time for %d examples: %f" %
                     (len(batch.orig_examples), time.time() - start))
             report.display()
-            done = True
+        done = True
     finally:
         print("Stopped.")
         report.save(done)
