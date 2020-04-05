@@ -14,7 +14,7 @@ import tools
 import models
 import arguments
 
-from tools.iterative_search import IterativeSearch, Strategy
+from tools.iterative_search import IterativeSearch, Strategy, TimeLimitStrategy
 
 
 def evaluate(args):
@@ -25,13 +25,10 @@ def evaluate(args):
     datasets.set_vocab(args)
     m = models.get_model(args)
     if args.eval_final:
-        for_eval = True
         eval_dataset = datasets.get_eval_final_dataset(args, m)
     elif args.eval_train:
-        for_eval = True
         eval_dataset, _ = datasets.get_dataset(args, m, eval_on_train=True)
     else:
-        for_eval = False
         eval_dataset = datasets.get_eval_dataset(args, m)
     if m.last_step == 0:
         raise ValueError('Attempting to evaluate on untrained model')
@@ -43,8 +40,8 @@ def evaluate(args):
     inference = m.inference
 
     if args.iterative_search is not None:
-        inference = IterativeSearch(inference, Strategy.get(args.iterative_search), current_executor,
-                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=for_eval))
+        inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True))
     if args.run_predict:
         evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path)
     else:
