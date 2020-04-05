@@ -99,12 +99,21 @@ class TimeLimitStrategy(Strategy):
 
 class GreedyStrategy(Strategy):
     def __init__(self, item):
+        self.seen = set()
         del item  # no need
 
     def decide(self, inference_result, evaluate):
-        considered = inference_result.info['candidates'][0]
-        res = evaluate(considered)
-        if res['correct'] == res['total']:
-            return 'accept', considered
-        else:
-            return 'expand', considered
+        unseen = []
+        for considered in inference_result.info['candidates']:
+            considered = tuple(considered)
+            if considered in self.seen:
+                continue
+            res = evaluate(considered)
+            if res['correct'] == res['total']:
+                return 'accept', considered
+            unseen.append((res['correct'], considered))
+        if not unseen:
+            return 'accept', inference_result.info['candidates'][0]
+        unseen.sort(reverse=True)
+        self.seen.add(unseen[0][1])
+        return 'expand', unseen[0][1]
