@@ -14,7 +14,7 @@ import tools
 import models
 import arguments
 
-from program_synthesis.tools.iterative_search import IterativeSearch, Strategy
+from tools.iterative_search import IterativeSearch, Strategy
 
 
 def evaluate(args):
