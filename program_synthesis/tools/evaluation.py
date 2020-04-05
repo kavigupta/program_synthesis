@@ -154,7 +154,9 @@ def run_predict(dataset, inference, do_execute, inference_output_path):
     assert not os.path.exists(inference_output_path), "must be a path that doesn't exist"
     assert os.path.isdir(os.path.dirname(inference_output_path)), "parent folder must exist"
     predictions = []
-    for batch in tqdm.tqdm(dataset):
+    success = total = 0
+    pdataset = tqdm.tqdm(dataset)
+    for batch in pdataset:
         results = inference(batch)
         for res, example in zip(results, batch.orig_examples):
             stats = executor.evaluate_code(res.code_sequence, example.schema.args, example.tests, do_execute)
@@ -162,6 +164,9 @@ def run_predict(dataset, inference, do_execute, inference_output_path):
                 output=res.info['candidates'][0],
                 is_correct=stats['correct']
             ))
+            success += stats['correct'] > 0
+            total += 1
+            pdataset.set_description("Accuracy: {:.2f}%".format(success / total * 100))
     with open(inference_output_path, "w") as f:
         json.dump(predictions, f)
 
