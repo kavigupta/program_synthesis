@@ -91,9 +91,10 @@ class TimeLimitStrategy(Strategy):
     def decide(self, inference_result, evaluate):
         self.step += 1
         assert self.step <= self.limit
+        decision, node = self.strategy.decide(inference_result, evaluate)
         if self.step == self.limit:
-            return 'accept', inference_result.info['candidates'][0]
-        return self.strategy.decide(inference_result, evaluate)
+            return 'accept', node
+        return decision, node
 
 
 class GreedyStrategy(Strategy):
