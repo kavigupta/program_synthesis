@@ -330,36 +330,54 @@ class KarelExampleMutator(object):
 
 
 class KarelIncorrectExampleMutator(object):
-    def __init__(self, results_file, add_trace):
+    def __init__(self, to_be_used, incorrect_code, add_trace):
+        """
+        Represents a list of incorrect examples, one per correct code example
+
+        Arguments:
+            to_be_used: a list of booleans, each of which represents whether the given item should be used.
+                The purpose of this is to be able to filter out items that represent correct programs, which
+                are not to be used
+
+            incorrect_code: a list of tuples, each of which represents an incorrect program. This must satisfy the
+                invariant len(incorrect_code) == sum(to_be_used)
+
+            add_trace: whether to add the execution trace when modifying a program
+        """
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
-        self.parser = KarelForSynthesisParser()
-        with open(results_file) as f:
-            examples = json.load(f)
-        self.to_be_used = [self._used(x) for x in examples]
-        self.negative_examples = [tuple(x['output']) for x, used in zip(examples, self.to_be_used) if used]
+        self.to_be_used = to_be_used
+        self.incorrect_code = incorrect_code
 
     @staticmethod
     def from_path(karel_ref_file_train, add_trace):
         if karel_ref_file_train is None:
             return None
-        return KarelIncorrectExampleMutator(karel_ref_file_train, add_trace)
 
-    def _used(self, x):
-        if x['is_correct']:
-            return False
-        try:
-            self.parser.parse(tuple(x['output']), debug=False)
-        except KarelSyntaxError:
-            return False
-        return True
+        with open(karel_ref_file_train) as f:
+            examples = json.load(f)
+
+        parser = KarelForSynthesisParser()
+
+        def can_be_used(x):
+            if x['is_correct']:
+                return False
+            try:
+                parser.parse(tuple(x['output']), debug=False)
+            except KarelSyntaxError:
+                return False
+            return True
+
+        to_be_used = [can_be_used(x) for x in examples]
+        negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
+        return KarelIncorrectExampleMutator(to_be_used, negative_examples, add_trace)
 
     def filter_index(self, index):
         return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
 
     def __call__(self, idx, karel_example):
-        assert self.negative_examples[idx]
-        result = add_incorrect_code(karel_example, self.negative_examples[idx], self.add_trace, self.executor)
+        assert self.incorrect_code[idx]
+        result = add_incorrect_code(karel_example, self.incorrect_code[idx], self.add_trace, self.executor)
         assert result.ref_example.code_sequence
         return result
 
