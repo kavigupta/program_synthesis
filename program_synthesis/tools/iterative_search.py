@@ -16,9 +16,9 @@ class IterativeSearch:
 
     def __call__(self, batch):
         strategies = [self.init_strategy(item) for item in batch.orig_examples]
-        done = [False] * len(batch)
-        index_mapping = {i: i for i in range(len(batch))}  # mapping from indices in batch/strategies to indices in done
-        while not all(done):
+        done = [False] * len(batch.orig_examples)
+        index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
+        while True:
             results = self.original_inference(batch)
             decisions = [strategy.decide(result, lambda code: self.test_results(code, example)) for
                          strategy, result, example in zip(strategies, results, batch.orig_examples)]
@@ -33,11 +33,13 @@ class IterativeSearch:
                     new_wrong_code.append(decision[1])
                     new_batch.append(batch.orig_examples[idx])
                     new_strategies.append(strategies[idx])
-                    new_index_mapping[len(new_wrong_code) - 1].append(index_mapping[idx])
+                    new_index_mapping[len(new_wrong_code) - 1] = index_mapping[idx]
                 else:
                     raise ValueError(
                         "Invalid decision: {}. The first element must be either 'accept' or 'expand' but was {}".format(
                             decision, decision[0]))
+            if all(done):
+                break
             index_mapping = new_index_mapping
             strategies = new_strategies
             batch = self.update_wrong_code_and_pack(new_batch, new_wrong_code)
@@ -47,7 +49,7 @@ class IterativeSearch:
         updated_examples = []
         for example, code in zip(new_examples, new_wrong_code):
             updated_examples.append(
-                mutation.add_incorrect_code(example, code, self.add_trace, self.executor, check_ref_example=False))
+                mutation.add_incorrect_code(example, tuple(code), self.add_trace, self.executor, check_ref_example=False))
         return self.batch_processor(updated_examples)
 
     def test_results(self, code, example):
