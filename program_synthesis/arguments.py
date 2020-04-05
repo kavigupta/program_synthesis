@@ -17,6 +17,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--vocab_min_freq', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=16)#128
     parser.add_argument('--load-sync', action='store_true')
+    parser.add_argument('--num_placeholders', type=int, default=0)  # 100
 
     parser.add_argument(
         '--pretrained', type=str, default='', 
@@ -38,7 +39,6 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
         train_group.add_argument('--num_epochs', type=int, default=10)
         train_group.add_argument('--num_units', type=int, default=100)
-        train_group.add_argument('--num_placeholders', type=int, default=0)  # 100
         train_group.add_argument('--num-att-heads', type=int, default=8)
         train_group.add_argument('--bidirectional', action='store_true', default=False)
         train_group.add_argument('--read-code', dest='read_code', action='store_true', default=False)
