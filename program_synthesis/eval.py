@@ -14,6 +14,8 @@ import tools
 import models
 import arguments
 
+from program_synthesis.tools.iterative_search import IterativeSearch, Strategy
+
 
 def evaluate(args):
     print("Evaluation:")
@@ -23,10 +25,13 @@ def evaluate(args):
     datasets.set_vocab(args)
     m = models.get_model(args)
     if args.eval_final:
+        for_eval = True
         eval_dataset = datasets.get_eval_final_dataset(args, m)
     elif args.eval_train:
+        for_eval = True
         eval_dataset, _ = datasets.get_dataset(args, m, eval_on_train=True)
     else:
+        for_eval = False
         eval_dataset = datasets.get_eval_dataset(args, m)
     if m.last_step == 0:
         raise ValueError('Attempting to evaluate on untrained model')
@@ -35,14 +40,20 @@ def evaluate(args):
     if args.example_id is not None:
         eval_dataset.data = [eval_dataset.task[args.example_id]]
 
+    inference = m.inference
+
+    if args.iterative_search is not None:
+        inference = IterativeSearch(inference, Strategy.get(args.iterative_search), current_executor,
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=for_eval))
     if args.run_predict:
-        evaluation.run_predict(eval_dataset, m.inference, current_executor.execute, args.predict_path)
+        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path)
     else:
         evaluation.run_eval(
-            args.tag, eval_dataset, m.inference,
+            args.tag, eval_dataset, inference,
             current_executor.execute, not args.hide_example_info,
             args.report_path,
             limit=args.limit)
+
 
 if __name__ == "__main__":
     parser = arguments.get_arg_parser('Evaluating Text2Code', 'eval')
