@@ -1441,7 +1441,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
             logits = self.out(dec_output)
             labels = dec_data.output.ps.data
 
-        return logits, labels, dec_output, list(dec_data.output.orig_lengths())#dec_data.output.lengths
+        return logits, labels, dec_output, (dec_data.output.ps.batch_sizes, dec_data.output.orig_to_sort)#dec_data.output.lengths
 
     def decode_token(self, token, state, memory, attentions, batch_order=None,
             use_end_mask=True):

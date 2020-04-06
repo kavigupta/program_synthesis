@@ -14,7 +14,7 @@ from models import get_model
 from datasets import data, dataset, set_vocab
 from datasets.karel import refine_env, mutation
 from tools import saver
-from tools.reporter import TensorBoardRLWrite
+#from tools.reporter import TensorBoardRLWrite
 from . import prepare_spec, karel_model
 from .modules import karel, attention
 
@@ -166,8 +166,22 @@ class KarelEditEnv(object):
 
     def edit_space_to_code_space_special_order(self, edit_codes, code_seqs, batches, order):
         
+        def compute_op(edit_token):
+            if edit_token == 2:
+                op = 'keep'
+                return op
+            if edit_token == 3:
+                op = 'delete'
+                return op
+            if edit_token > 3:
+                if edit_token%2 == 0:
+                    op = 'insert'
+                    return op
+                if edit_token%2 != 0:
+                    op = 'replace'
+                    return op
+
         def new_token(idx, edit_token, code_seq):
-            #(*) make this guy
             #    0: <s>
             #   1: </s>
             #   2: keep
@@ -176,43 +190,89 @@ class KarelEditEnv(object):
             #   5: replace vocab 0
             #   6: insert vocab 1
             #   7: replace vocab 1
+
+            # Compute operation
             if edit_token == 0:
                 return 0, code_seq, idx
-            if edit_token == 1:
+            elif edit_token == 1:
                 return 1, code_seq, idx
-            if edit_token == 2:
-                op = 'keep'
-            if edit_token == 3:
-                op = 'delete'
-            if edit_token%2 == 0:
-                op = 'insert'
-            if edit_token%2 != 0:
-                op = 'replace'
-            
+            else:
+                op = compute_op(edit_token)
+
+            # new token to use
             computed_token = int(np.floor((edit_token.item() - 4)/2))
+
+            # Check if out of bounds
+            if len(code_seq)<=idx:
+                out_of_seq = True
+            else:
+                out_of_seq = False
+            
+            # Check if empty
+            if len(code_seq)==0:
+                is_empty = True
+            else:
+                is_empty = False
+
             if op == 'keep':
-                return int(code_seq[idx]), code_seq, idx+1
+                if out_of_seq:
+                    return None, code_seq, idx+1
+                if is_empty:
+                    return None, code_seq, 0
+                else:
+                    return int(code_seq[idx]), code_seq, idx+1
             if op == 'delete':
                 if idx==0:
                     return None, code_seq[1:], idx
-                code_seq = code_seq[:idx-1] + code_seq[idx:]
-                return None, code_seq, idx
+                if out_of_seq:
+                    return None, code_seq, idx
+                if is_empty:
+                    return None, code_seq, 0
+                else:
+                    code_seq = torch.cat((code_seq[:idx],code_seq[idx+1:]),dim=0)
+                    return None, code_seq, idx
             if op == 'insert':
                 code_seq = torch.cat((code_seq[:idx],torch.tensor([computed_token]),code_seq[idx:]))
                 return int(code_seq[idx]), code_seq, idx+1
             if op == 'replace':
-                if idx >= len(code_seq):
-                    return None, code_seq
-                code_seq[idx] = computed_token
-                return int(computed_token), code_seq, idx
-        
+                if out_of_seq or is_empty:
+                    return None, code_seq, idx
+                else:
+                    code_seq[idx] = computed_token
+                    return int(computed_token), code_seq, idx
+
+
         idxs = [0 for i in order]
         next_states = [[] for i in order]
         code_seqs = list(code_seqs)
+        for idx, code_seq in enumerate(code_seqs):
+            code_seqs[idx] = code_seq[code_seq>-1]
+
+        # (*) Does this one actually append the correct edit codes
+        edit_batches = [[] for i in order]
+        idx=0
+        sequence = []
         for b in batches:
-            order_step = order[:b]
-            for i in order_step:
-                value, code_seq, update = new_token(idxs[i], edit_codes[i+idxs[i]], code_seqs[i])
+            sequence = sequence + list(order[:b])
+        for idx, edit in enumerate(edit_codes):
+            if idx == len(sequence):
+                break
+            else:
+                i = sequence[idx]
+                edit_batches[i].append(edit_codes[idx])
+            
+        #for b in batches:
+        #    order_step = order[:b]
+        #    for i in order_step:
+        #        edit_batches[i].append(edit_codes[i+idx])
+        #    idx += int(b)
+            # Find out why this is needed?
+        #    if idx >= len(edit_codes)-disc:
+        #        break
+
+        for i in order:
+            for edit in edit_batches[i]:
+                value, code_seq, update = new_token(idxs[i], edit, code_seqs[i])
                 code_seqs[i] = code_seq
                 idxs[i] = update
                 if value != None:
@@ -222,23 +282,23 @@ class KarelEditEnv(object):
                 for j in range(idxs[i], len(code_seqs[i])):
                     if int(code_seqs[i][j])>-1:
                         next_states[i].append(int(code_seqs[i][j]))
+        for i in order:
+            if len(next_states[i])==0:
+                next_states[i].append(0)
+                next_states[i].append(1)
+                bp = 0
+            if 1 not in next_states[i]:
+                next_states[i].append(1)
 
         return next_states
 
     def update_states(self, states, new_states):
 
-        def list_length(new_states):
-
-            lengths_lst = []
-            for i in range(len(new_states)):
-                lengths_lst.append(len(new_states[i]))
-
-            return lengths_lst
-
         input_grids, output_grids, code_seqs, \
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
+        #print(orig_examples)
 
         lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
 
@@ -247,9 +307,13 @@ class KarelEditEnv(object):
         ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
                 v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
 
+        #ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
+
         #ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor(ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
 
         dec_data_new = self.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
+
+        orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(new_states, -1), False, False)
         
         return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
     
@@ -261,6 +325,7 @@ class KarelEditEnv(object):
         success = False
         mean_acc = []
         for _ in range(max_rollout_length):
+
             action = agent.select_action(state, return_true_code=True )
             # Reward is calculated correct, however it should not split in chucks but in the weird order.
             new_state, reward, done, acc = self.step(action)
@@ -297,7 +362,6 @@ class KarelEditPolicy(nn.Module):
 
         set_vocab(args)
         self.model = get_model(args)
-        torch.backends.cudnn.enabled = False
 
     def encode(self, input_grid, output_grid):
         return self.model.model.encoder(input_grid,output_grid)
@@ -325,7 +389,6 @@ class KarelEditPolicy(nn.Module):
             ref_code = karel_model.maybe_cuda(ref_code, async=True)
             ref_trace_grids = karel_model.maybe_cuda(ref_trace_grids, async=True)
             ref_trace_events = karel_model.maybe_cuda(ref_trace_events, async=True)
-
 
         io_embed = self.encode(input_grids, output_grids)
         # code_seq = ground thruth code, ref_code.ps.data = edited
@@ -367,14 +430,16 @@ class KarelAgent(object):
 
     def best_action_value(self, states, return_true_code):
         logits, labels, dec_output, lengths = self.model.action_value(states)
+        # Yield states[-1] for orig code containing item.ref_example.code_sequence
         
         probs = nn.functional.softmax(logits,dim=1)
 
         values = self.critic(dec_output)
+        # Change to [2] for original code and [-1] for modified code
         if return_true_code:
-            return labels, probs, states[2], values, (states[4].ps.batch_sizes,states[4].orig_to_sort)
+            return labels, probs, states[-1], values, lengths
         else:
-            return labels, probs, [], values, (states[4].ps.batch_sizes,states[4].orig_to_sort)
+            return labels, probs, [], values, lengths
 
 class ReplayBuffer(object):
 
@@ -558,12 +623,35 @@ class PolicyTrainer(object):
 
     def special_order_to_batch(self, value, batches, order, action='sum'):
 
-        value_batch = [[] for i in order ]
-        idxs = [0 for i in order]
+        value_batch = [[] for i in order]
+        idx=0
+        sequence = []
         for b in batches:
-            order_step = order[:b]
-            for i in order_step:
-                value_batch[i].append(value[idxs[i]+i])
+            sequence = sequence + list(order[:b])
+        for idx, edit in enumerate(value):
+            if idx == len(sequence):
+                break
+            else:
+                i = sequence[idx]
+                value_batch[i].append(value[idx])
+
+        #value_batch = [[] for i in order ]
+        #value_ = value
+        #idx = 0
+        #for b in batches:
+        #    order_step = order[:b]
+        #    for i in order_step:
+        #        value_batch[i].append(value[i+idx])
+        #    idx += int(b)
+
+        
+        #while len(value)!=0:
+        #    b = batches[0]
+        #    order_step = order[:b]
+        #    for i in order_step:
+        #        value_batch[i].append(value[i])
+        #    value = value[len(order_step):]
+        #    batches = batches[1:]
         for i in order:
             value_batch[i] = torch.stack(value_batch[i])
             if action == 'sum':
@@ -630,6 +718,11 @@ class PolicyTrainer(object):
             for idx, b in enumerate(batch):
                 labels, probs, _, value, _ = self.actor_critic.select_action(b[0],return_true_code=False)
 
+                extra = torch.ones(probs.shape[1]).cuda() if self.args.cuda else torch.ones(probs.shape[1])
+                extra = extra*1e-12
+
+                probs = probs + extra
+
                 values[idx]=value.view(-1)
 
                 # (*) Contnue here to sort probs !!!
@@ -655,11 +748,11 @@ class PolicyTrainer(object):
 
             v_prime = torch.cat((v_prime,value.view(1,-1)))
 
-            td_target = v_prime * DISCOUNT
+            td_target = v_prime * DISCOUNT + reward_s
             delta = td_target - values
 
             # Simple PPO update
-            delta = delta + reward_s
+            delta = delta 
             delta = delta.detach().cpu().numpy() if self.args.cuda else delta.detach().numpy()
 
             advantage_lst = []
@@ -689,6 +782,14 @@ class PolicyTrainer(object):
             action_loss_epoch += action_loss.item()
             dist_entropy_epoch += dist_entropy.item()
 
+        if np.isnan(np.array(action_loss_epoch)):
+            print(pi_old)
+            print(pi_a)
+            print(values)
+            print(td_target)
+            print(batch)
+        if action_loss_epoch>3000:
+            bp = 0
         value_loss_epoch /= self.args.ppo_steps
         action_loss_epoch /= self.args.ppo_steps
         dist_entropy_epoch /= self.args.ppo_steps
@@ -873,10 +974,16 @@ def main():
 
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
-    torch.backends.cudnn.enabled = False
+    #torch.backends.cudnn.enabled = False
 
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
+
+    # Set seed to redo nan error
+    torch.manual_seed(0)
+    np.random.seed(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     agent_cls = KarelAgent
     env = KarelEditEnv(args)
 
