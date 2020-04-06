@@ -5,6 +5,8 @@ import sys
 import time
 import traceback
 import random
+import tqdm
+import os
 
 from datasets import dataset
 from datasets import executor
@@ -60,14 +62,14 @@ class EvalReport(object):
             f.write("</table>\n")
             f.write("</body></html>")
 
-    def save(self):
+    def save(self, done=False):
         if self.report_path:
             report_path = self.report_path
         else:
             timestamp = int(time.time())
             report_path = 'reports/report-%s-%s.json' % (self.tag, timestamp)
         with open(report_path, 'w') as f:
-            f.write(json.dumps(self.stats) + "\n")
+            f.write(json.dumps({**self.stats, 'done' : done}) + "\n")
             for example, res, st in self.report:
                 f.write(json.dumps({
                     "stats": st,
@@ -138,6 +140,44 @@ class EvalReport(object):
             self.show_example(example, res, st)
 
 
+def run_predict(dataset, inference, do_execute, inference_output_path):
+    """Runs inference of given model on eval set, and executes resulting code.
+
+    Args:
+        tag: str, tag of the run to save report.
+        dataset: Dataset, iterable of CodeExample to evaluate on.
+        inference: func, produces code for given CodeExamples.
+        do_execute: func, runs given code with given arguments.
+        show_info: Show specific example additional information.
+    """
+    assert inference_output_path is not None, "must provide path"
+    assert not os.path.exists(inference_output_path), "must be a path that doesn't exist"
+    assert os.path.isdir(os.path.dirname(inference_output_path)), "parent folder must exist"
+    predictions = []
+    success = total = 0
+    pdataset = tqdm.tqdm(dataset)
+    for batch in pdataset:
+        results = inference(batch)
+        for res, example in zip(results, batch.orig_examples):
+            stats = executor.evaluate_code(res.code_sequence, example.schema.args, example.tests, do_execute)
+            predictions.append(dict(
+                output=res.info['candidates'][0],
+                is_correct=stats['correct']
+            ))
+            success += stats['correct'] > 0
+            total += 1
+            pdataset.set_description("Accuracy: {:.2f}%".format(success / total * 100))
+    with open(inference_output_path, "w") as f:
+        json.dump(predictions, f)
+
+def limited(dataset, limit):
+    count = 0
+    for batch in dataset:
+        if limit is not None and count >= limit:
+            break
+        count += batch.input_grids.shape[0]
+        yield batch
+
 def run_eval(tag, dataset, inference, do_execute, show_info=True,
         report_path=None, limit=None):
     """Runs inference of given model on eval set, and executes resulting code.
@@ -150,25 +190,22 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
         show_info: Show specific example additional information.
     """
     report = EvalReport(tag=tag, show_info=show_info, report_path=report_path)
-    count = 0
+    done = False
     try:
-        for batch in dataset:
-            if limit is not None and count >= limit:
-                break
-            count += batch.input_grids.shape[0]
+        for batch in limited(dataset, limit):
             start = time.time()
             results = inference(batch)
             for res, example in zip(results, batch.orig_examples):
-                #print res.code_tree
                 stats = executor.evaluate_code(
                     res.code_tree if res.code_tree else res.code_sequence, example.schema.args, example.tests, do_execute)
                 report.add_example(example, res, stats)
             print("[Eval] Elapsed time for %d examples: %f" %
                     (len(batch.orig_examples), time.time() - start))
             report.display()
+        done = True
     finally:
         print("Stopped.")
-        report.save()
+        report.save(done)
         report.display()
     
 

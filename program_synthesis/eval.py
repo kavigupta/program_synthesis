@@ -14,6 +14,8 @@ import tools
 import models
 import arguments
 
+from tools.iterative_search import IterativeSearch, Strategy, TimeLimitStrategy
+
 
 def evaluate(args):
     print("Evaluation:")
@@ -35,11 +37,19 @@ def evaluate(args):
     if args.example_id is not None:
         eval_dataset.data = [eval_dataset.task[args.example_id]]
 
-    evaluation.run_eval(
-        args.tag, eval_dataset, m.inference,
-        current_executor.execute, not args.hide_example_info,
-        args.report_path,
-        limit=args.limit)
+    inference = m.inference
+
+    if args.iterative_search is not None:
+        inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True))
+    if args.run_predict:
+        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path)
+    else:
+        evaluation.run_eval(
+            args.tag, eval_dataset, inference,
+            current_executor.execute, not args.hide_example_info,
+            args.report_path,
+            limit=args.limit)
 
 
 if __name__ == "__main__":

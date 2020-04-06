@@ -2,11 +2,13 @@ import collections
 import copy
 import itertools
 import struct
+import json
 
 import numpy as np
 
 from ..dataset import executor
 from . import parser_for_synthesis
+from ..karel import KarelForSynthesisParser, KarelSyntaxError
 
 # Tree structure
 # - run: body
@@ -281,6 +283,28 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
+def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True):
+    from ..dataset import KarelExample
+    if check_ref_example:
+        assert karel_example.ref_example is None
+    # TODO: Get the real trace
+    new_tests = []
+    if add_trace:
+        for ex in karel_example.input_tests:
+            result = executor.execute(new_code, None, ex['input'],
+                                      record_trace=True, strict=True)
+            new_ex = dict(ex)
+            new_ex['trace'] = result.trace
+            new_tests.append(new_ex)
+    karel_example.ref_example = KarelExample(
+        idx=None,
+        guid=None,
+        code_sequence=new_code,
+        input_tests=new_tests,
+        tests=karel_example.tests)
+    return karel_example
+
+
 class KarelExampleMutator(object):
     def __init__(self, n_dist, rng_fixed, add_trace, probs=None):
         self.n_dist = n_dist / np.sum(n_dist)
@@ -294,34 +318,69 @@ class KarelExampleMutator(object):
         self.executor = executor.KarelExecutor(action_limit=250)
 
     def __call__(self, karel_example):
-        from ..dataset import KarelExample
-        assert karel_example.ref_example is None
+        return add_incorrect_code(karel_example, self.mutate_code(karel_example), self.add_trace, self.executor)
+
+    def mutate_code(self, karel_example):
         tree = self.parser.parse(karel_example.code_sequence)
         if self.rng_fixed:
             self.rng.seed(int(karel_example.guid[:8], base=16))
         n = self.rng.choice(len(self.n_dist), p=self.n_dist) + 1
-
         new_tree = mutate_n(tree, n, self.probs, self.rng, allow_in_place=True)
         new_code = parser_for_synthesis.tree_to_tokens(new_tree)
+        return new_code
 
-        # TODO: Get the real trace
-        new_tests = []
-        if self.add_trace:
-            for ex in karel_example.input_tests:
-                result = self.executor.execute(new_code, None, ex['input'],
-                                               record_trace=True, strict=True)
-                new_ex = dict(ex)
-                new_ex['trace'] = result.trace
-                new_tests.append(new_ex)
 
-        karel_example.ref_example = KarelExample(
-            idx=None,
-            guid=None,
-            code_sequence=new_code,
-            input_tests=new_tests,
-            tests=karel_example.tests)
-        return karel_example
+class KarelIncorrectExampleMutator(object):
+    def __init__(self, to_be_used, incorrect_code, add_trace):
+        """
+        Represents a list of incorrect examples, one per correct code example
 
+        Arguments:
+            to_be_used: a list of booleans, each of which represents whether the given item should be used.
+                The purpose of this is to be able to filter out items that represent correct programs, which
+                are not to be used
+
+            incorrect_code: a list of tuples, each of which represents an incorrect program. This must satisfy the
+                invariant len(incorrect_code) == sum(to_be_used)
+
+            add_trace: whether to add the execution trace when modifying a program
+        """
+        self.add_trace = add_trace
+        self.executor = executor.KarelExecutor(action_limit=250)
+        self.to_be_used = to_be_used
+        self.incorrect_code = incorrect_code
+
+    @staticmethod
+    def from_path(karel_ref_file_train, add_trace):
+        if karel_ref_file_train is None:
+            return None
+
+        with open(karel_ref_file_train) as f:
+            examples = json.load(f)
+
+        parser = KarelForSynthesisParser()
+
+        def can_be_used(x):
+            if x['is_correct']:
+                return False
+            try:
+                parser.parse(tuple(x['output']), debug=False)
+            except KarelSyntaxError:
+                return False
+            return True
+
+        to_be_used = [can_be_used(x) for x in examples]
+        negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
+        return KarelIncorrectExampleMutator(to_be_used, negative_examples, add_trace)
+
+    def filter_index(self, index):
+        return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
+
+    def __call__(self, idx, karel_example):
+        assert self.incorrect_code[idx]
+        result = add_incorrect_code(karel_example, self.incorrect_code[idx], self.add_trace, self.executor)
+        assert result.ref_example.code_sequence
+        return result
 
 # Definition of Action Parameters
 

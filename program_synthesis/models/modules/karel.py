@@ -13,7 +13,7 @@ from models import base, prepare_spec
 from .. import beam_search
 from datasets import data
 from .attention import SimpleSDPAttention
-from .gcn_conv import MultiGCNConv
+from .gcn_conv import MultiGCNConv, GGCN
 
 
 def default(value, if_none):
@@ -375,13 +375,60 @@ def get_program_trace_edges(trace_events, program_itv, trace_itv):
                     edges.append((pi, ti))
     return edges
 
+
+def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit):
+    """
+    Parameters:
+        trace_events: a Spans object representing the events happening during a trace
+        inp_lengths: the lengths of each program
+        inp_itv: a mapping from (program number, number within program) --> vertex
+        trace_lengths: the lengths of each trace
+        trace_itv: a mapping from (trace number, number within trace) --> vertex
+        sequence_edge_limit: the maximum number of hops to connect elements in a sequence (trace or program)
+    """
+    program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
+    edges = []
+    edges += [(p, t, 'pt') for p, t in program_trace]
+    edges += [(t, p, 'tp') for p, t in program_trace]
+    edges += generate_sequence_edges(sequence_edge_limit, 'tt', trace_itv, trace_lengths)
+    edges += generate_sequence_edges(sequence_edge_limit, 'pp', inp_itv, inp_lengths)
+    return edges
+
+
+def generate_sequence_edges(sequence_edge_limit, tag, itv, lengths):
+    edges = []
+    for dist in range(1, 1 + sequence_edge_limit):
+        for i, length in enumerate(lengths):
+            for j in range(length - dist):
+                start, end = itv[i, j], itv[i, j + dist]
+                edges += [(start, end, (tag, dist))]
+                edges += [(end, start, (tag, -dist))]
+    return edges
+
+def get_edge_types(sequence_edge_limit):
+    edge_types = []
+    edge_types += ['pt', 'tp']
+    for dist in range(1, 1 + sequence_edge_limit):
+        edge_types += [('pp', +dist), ('pp', -dist), ('tt', +dist), ('tt', -dist)]
+    return edge_types
+
 class TraceGraphConv(nn.Module):
-    def __init__(self, program_dim, grid_dim, layers):
+    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit, ggcn, ggcn_multi_edge_types):
         super().__init__()
         assert program_dim == grid_dim
+        if ggcn_multi_edge_types:
+            assert ggcn, "to use multiple edge types, you need to use ggcn"
         self.dim = program_dim
-
-        self.multi_conv = MultiGCNConv(self.dim, layers)
+        self.ggcn = ggcn
+        self.ggcn_multi_edge_types = ggcn_multi_edge_types
+        self.sequence_edge_limit = sequence_edge_limit
+        if ggcn:
+            if self.ggcn_multi_edge_types:
+                self.multi_conv = GGCN(self.dim, get_edge_types(sequence_edge_limit), layers)
+            else:
+                self.multi_conv = GGCN(self.dim, None, layers)
+        else:
+            self.multi_conv = MultiGCNConv(self.dim, layers)
 
     def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
 
@@ -394,18 +441,14 @@ class TraceGraphConv(nn.Module):
         inp_flat, inp_ftn, inp_itv = flatten(inp_embed)
         trace_flat, trace_ftn, trace_ntf = flatten(trace_embed)
 
+        trace_lengths = trace_embed.orig_lengths()
+        inp_lengths = inp_embed.orig_lengths()
+
         vertices = torch.cat([inp_flat, trace_flat], dim=0)
 
         trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
 
-        program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
-        edges = program_trace
-        edges += [(trace_itv[i, j], trace_itv[i, j + 1]) for i, length in enumerate(trace_embed.orig_lengths()) for j in range(length - 1)]
-        edges += [(inp_itv[i, j], inp_itv[i, j + 1]) for i, length in enumerate(inp_embed.orig_lengths()) for j in range(length - 1)]
-        edges += [(b, a) for a, b in edges] # make the graph symmetric
-        edges = torch.tensor(edges).T
-        if vertices.is_cuda:
-            edges = edges.cuda()
+        edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit=self.sequence_edge_limit)
 
         vertices = self.multi_conv(vertices, edges)
 
@@ -510,7 +553,8 @@ class AugmentWithTrace(nn.Module):
             grid_encoder_channels=64,
             conv_all_grids=False,
             rnn_trace=False, rnn_trace_layers=2,
-            graph_conv_trace=False, graph_conv_trace_layers=2,
+            graph_conv_trace=False, graph_conv_trace_layers=2, graph_conv_sequence_edge_limit=1,
+            graph_conv_ggcn=False, graph_conv_multi_edge_types=False,
             attention_trace=False):
         """
         grid_encoder_channels: the number of channels to use in the conv
@@ -528,7 +572,10 @@ class AugmentWithTrace(nn.Module):
         assert not graph_conv_trace or not attention_trace, "cannot be both graph conv and attention trace"
 
         if graph_conv_trace:
-            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers)
+            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers,
+                                                       sequence_edge_limit=graph_conv_sequence_edge_limit,
+                                                       ggcn=graph_conv_ggcn,
+                                                       ggcn_multi_edge_types=graph_conv_multi_edge_types)
         elif attention_trace:
             trace_incorporator_cls = AttentionTrace
         else:
