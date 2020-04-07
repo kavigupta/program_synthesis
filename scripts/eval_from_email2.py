@@ -10,7 +10,10 @@ def valid_checkpoints():
         if "baseline_model" in logdir:
             continue
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
-            time_delta = time.time() - os.path.getmtime(ckpt)
+            try:
+                time_delta = time.time() - os.path.getmtime(ckpt)
+            except FileNotFoundError:
+                continue
             if time_delta < 5 * 60:
                 # ignore really recent checkpoints (last 5 minutes)
                 # these are deleted by the time an evaluation can be run :(
