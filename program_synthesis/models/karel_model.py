@@ -403,7 +403,8 @@ class KarelLGRLRefineBatchProcessor(object):
 
         orig_examples = batch if self.for_eval else None
 
-        # orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy([('<S>',) + item.ref_example.code_sequence +('</S>',) for item in batch], self.vocab.stoi,-1),False,False)
+        if self.args.use_ref_orig:
+            orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy([('<S>',) + item.ref_example.code_sequence +('</S>',) for item in batch], self.vocab.stoi,-1),False,False)
 
         return KarelLGRLRefineExample(
             input_grids, output_grids, code_seqs, dec_data,
