@@ -40,7 +40,7 @@ class IterativeSearch:
                     raise ValueError(
                         "Invalid decision: {}. The first element must be either 'accept' or 'expand' but was {}".format(
                             decision, decision[0]))
-            if all(done):
+            if all(x is not False for x in done):
                 break
             index_mapping = new_index_mapping
             strategies = new_strategies
@@ -106,6 +106,8 @@ class GreedyStrategy(Strategy):
         unseen = []
         for considered in inference_result.info['candidates']:
             considered = tuple(considered)
+            if not considered:
+                continue
             if considered in self.seen:
                 continue
             res = evaluate(considered)
