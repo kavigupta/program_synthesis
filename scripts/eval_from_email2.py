@@ -7,7 +7,7 @@ import time
 
 def valid_checkpoints():
     for logdir in glob.glob('logdirs/**/*', recursive=True):
-        if "baseline_model" in logdir:
+        if "logdirs/baseline_model" in logdir:
             continue
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
