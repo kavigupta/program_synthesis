@@ -58,7 +58,7 @@ class IterativeSearch:
         return self.batch_processor(updated_examples)
 
     def test_results(self, code, example):
-        return evaluate_code(code, example.schema.args, example.tests, self.executor.execute)
+        return evaluate_code(code, example.schema.args, example.input_tests, self.executor.execute)
 
 
 class Strategy(ABC):
