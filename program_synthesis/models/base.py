@@ -72,7 +72,11 @@ class BaseModel(object):
                 self.load_pretrained(kind, path)
 
     def load_pretrained(self, kind, path):
-        raise NotImplementedError
+        if kind == 'entire-model':
+            self.saver.restore(path, map_to_cpu=self.args.restore_map_to_cpu,
+                               step=getattr(self.args, 'step', None))
+        else:
+            raise NotImplementedError
 
     def compute_loss(self, batch):
         raise NotImplementedError
