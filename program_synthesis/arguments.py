@@ -54,7 +54,7 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--skip-io', dest='read_io', action='store_false')
         train_group.add_argument('--io-count', type=int, default=3)
 
-        train_group.add_argument('--train-policy-gradient-loss', type=bool, default=False)
+        train_group.add_argument('--train-policy-gradient-loss', action='store_true')
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)

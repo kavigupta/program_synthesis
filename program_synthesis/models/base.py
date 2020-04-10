@@ -67,8 +67,8 @@ class BaseModel(object):
             self.model_dir, map_to_cpu=args.restore_map_to_cpu,
             step=getattr(args, 'step', None))
         if self.last_step == 0 and args.pretrained:
-            for kind_path in args.pretrained.split('::'):
-                kind, path = kind_path.split(':')
+            for kind_path in args.pretrained.split(':_:'):
+                kind, path = kind_path.split('::')
                 self.load_pretrained(kind, path)
 
     def load_pretrained(self, kind, path):
