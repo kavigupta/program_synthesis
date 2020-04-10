@@ -74,7 +74,7 @@ class BaseModel(object):
     def load_pretrained(self, kind, path):
         if kind == 'entire-model':
             self.saver.restore(path, map_to_cpu=self.args.restore_map_to_cpu,
-                               step=getattr(self.args, 'step', None))
+                               step=self.args.pretrained_step)
         else:
             raise NotImplementedError
 

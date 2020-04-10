@@ -22,9 +22,12 @@ def get_arg_parser(title, mode):
     parser.add_argument('--num_placeholders', type=int, default=0)  # 100
     parser.add_argument('--use_ref_orig', action='store_true')
 
+
     parser.add_argument(
         '--pretrained', type=str, default='', 
-        help='Use format "encoder:path/to/checkpoint,decoder:path/to/other/checkpoint"')
+        help='Use format "entire-model:logdirs/path"')
+    parser.add_argument(
+        '--pretrained-step', type=int, default=None)
 
     if mode == 'train':
         train_group = parser.add_argument_group('train')
