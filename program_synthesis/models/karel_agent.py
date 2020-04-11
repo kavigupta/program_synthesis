@@ -2,11 +2,13 @@ import collections
 import copy
 
 import numpy as np
+import random
 import operator
 
 import torch
 import torch.nn as nn
 from torch import optim
+import pickle as pkl
 
 import arguments
 #from program_synthesis.common.tools import saver
@@ -14,7 +16,8 @@ from models import get_model
 from datasets import data, dataset, set_vocab
 from datasets.karel import refine_env, mutation
 from tools import saver
-#from tools.reporter import TensorBoardRLWrite
+from tools.reporter import TensorBoardRLWrite
+from models.radam import RAdam
 from . import prepare_spec, karel_model
 from .modules import karel, attention
 
@@ -29,8 +32,15 @@ ALPHA = 0.7
 
 StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths', 'acc'])
 
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)   
+    torch.cuda.manual_seed_all(seed)    
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-#  https://arxiv.org/pdf/1511.04143.pdf
 
 class KarelEditEnv(object):
 
@@ -45,6 +55,7 @@ class KarelEditEnv(object):
         self.data_iter = self.dataset_loader.__iter__()
         self._cur_env = None
         self._cuda = args.cuda
+        self.args = args
 
     def reset(self):
         example = self.data_iter.next()
@@ -216,7 +227,7 @@ class KarelEditEnv(object):
 
             if op == 'keep':
                 if out_of_seq:
-                    return None, code_seq, idx+1
+                    return None, code_seq, idx
                 if is_empty:
                     return None, code_seq, 0
                 else:
@@ -349,7 +360,22 @@ class KarelEditEnv(object):
         reward = self.compute_reward(labels, actions, lengths, simple=True)
 
         # Similarly the next states should also be modified in this fasion
-        next_state = self.edit_space_to_code_space_special_order(actions, code_seq, lengths[0], lengths[1])
+        try:
+            next_state = self.edit_space_to_code_space_special_order(actions, code_seq, lengths[0], lengths[1])
+        except IndexError:
+            print((actions, code_seq, lengths[0], lengths[1]))
+            with open(self.args.model_dir + "actions.pkl", "wb") as fout:
+                pkl.dump(actions, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "code_seq.pkl", "wb") as fout:
+                pkl.dump(code_seq, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "lengths0.pkl", "wb") as fout:
+                pkl.dump(lengths[0], fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "lengths1.pkl", "wb") as fout:
+                pkl.dump(lengths[1], fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
 
         #obs, reward, done, info = self._cur_env.step(action)
         return next_state, reward, True, acc
@@ -405,7 +431,6 @@ class KarelEditPolicy(nn.Module):
             return logits, labels, dec_output, lengths
         else:
             return logits, labels, torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1), lengths
-#torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1)
 
 class KarelAgent(object):
 
@@ -413,7 +438,7 @@ class KarelAgent(object):
         self.vocab = env.vocab
         self.model = KarelEditPolicy(args)
         self.criterion = nn.MSELoss()
-        self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
+        self.optimizer = RAdam(self.model.model.model.parameters(), lr=args.lr)
         if not args.use_code_level_state:
             self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
         else:
@@ -486,7 +511,13 @@ class PolicyTrainer(object):
     def __init__(self, args, agent_cls, env):
         self.args = args
         self.actor_critic = agent_cls(env, args)
+        self.step = 0
         self.env = env
+        self.broke = False
+        self.update_lr = torch.optim.lr_scheduler.CosineAnnealingLR(self.actor_critic.optimizer, int(args.num_epochs*1116864/args.batch_size), eta_min=0, last_epoch=-1)
+
+    def load_pretrained(self, model_dir, map_to_cpu, step):
+        self.step = saver.load_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, model_dir, map_to_cpu, step)
 
     def train_actor_critic(self, batch):
         states = self.env.prepare_states([ex.state for ex in batch])
@@ -591,7 +622,8 @@ class PolicyTrainer(object):
         return old_action_log_probs_batch, actions
 
     def compute_action_loss(self, pi_a, prob_a, advantage):
-        ratio = torch.exp(pi_a - prob_a)
+        safe_bounds = torch.cuda.FloatTensor([5]) if self.args.cuda else torch.FloatTensor([5])
+        ratio = torch.exp(torch.min(pi_a - prob_a, safe_bounds))
         surr1 = ratio * advantage
         surr2 = torch.clamp(ratio, 1.0 - self.args.clip_param,
                                 1.0 + self.args.clip_param) * advantage
@@ -619,6 +651,7 @@ class PolicyTrainer(object):
         nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
                                         self.args.max_grad_norm)
         self.actor_critic.optimizer.step()
+        self.update_lr.step()
         return
 
     def special_order_to_batch(self, value, batches, order, action='sum'):
@@ -677,6 +710,8 @@ class PolicyTrainer(object):
         return torch.zeros(self.args.max_rollout_length, self.args.batch_size).cuda() if self.args.cuda else torch.zeros(self.args.max_rollout_length, self.args.batch_size)
 
     def Program_PPO_update(self, batch):
+        if self.broke:
+            return 0
         # store data
         pi_old = self.initialise_rollout_batch()
         reward_s =  self.initialise_rollout_batch()
@@ -782,12 +817,36 @@ class PolicyTrainer(object):
             action_loss_epoch += action_loss.item()
             dist_entropy_epoch += dist_entropy.item()
 
-        if np.isnan(np.array(action_loss_epoch)):
-            print(pi_old)
-            print(pi_a)
-            print(values)
-            print(td_target)
-            print(batch)
+        if (np.isnan(np.array(action_loss_epoch)) or np.isnan(np.array(value_loss_epoch))):
+            if self.broke:
+                return 0
+            with open(self.args.model_dir + "value_preds_batch__origs.pkl", "wb") as fout:
+                pkl.dump(value_preds_batch__origs, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "pi_old.pkl", "wb") as fout:
+                pkl.dump(pi_old, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "pi_a.pkl", "wb") as fout:
+                pkl.dump(pi_a, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "values.pkl", "wb") as fout:
+                pkl.dump(values, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "td_target.pkl", "wb") as fout:
+                pkl.dump(td_target, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            with open(self.args.model_dir + "batch.pkl", "wb") as fout:
+                pkl.dump(batch, fout, protocol=pkl.HIGHEST_PROTOCOL)
+            fout.close()
+            #print(value_preds_batch__origs)
+            #print(pi_old)
+            #print(pi_a)
+            #print(values)
+            #print(td_target)
+            #print(batch)
+
+            self.broke = True
+            return 0
         if action_loss_epoch>3000:
             bp = 0
         value_loss_epoch /= self.args.ppo_steps
@@ -932,15 +991,22 @@ class PolicyTrainer(object):
         return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
 
     def train(self):
-        #writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
+        if self.args.load_sl_model:
+            self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',self.args.cuda, int(930100))
+        writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
         replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
+        errors = 0
         runner = 0
         cum_reward = 0
         for epoch in range(self.args.num_epochs):
             for i, batch in enumerate(self.env.dataset_loader):
             #for i in range(self.args.num_episodes):
                 with torch.no_grad():
-                    _, experience = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length)
+                    try:
+                        _, experience = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length)
+                    except IndexError:
+                        errors+=1
+                        continue
                 runner+=1*self.args.batch_size
                 loss = self.Program_PPO_update(experience)
                 print('epoch {}'.format(epoch))
@@ -950,14 +1016,15 @@ class PolicyTrainer(object):
                 print('training/entropy {}'.format(loss[2]))
                 print('training/reward {}'.format(loss[3]))
                 print('training/acc {}'.format(_))
+                print('errors {}'.format(errors))
                 cum_reward += loss[3]
                 print('training/cummulative_reward {}'.format(cum_reward))
-                #writer.add(runner,'training/action_loss', loss[0])
-                #writer.add(runner,'training/value_loss', loss[1])
-                #writer.add(runner,'training/entropy', loss[2])
-                #writer.add(runner,'training/reward', loss[3])
-                #writer.add(runner,'training/cummulative_reward', cum_reward)
-                #writer.add(runner,'training/acc', _)
+                writer.add(runner,'training/action_loss', loss[0])
+                writer.add(runner,'training/value_loss', loss[1])
+                writer.add(runner,'training/entropy', loss[2])
+                writer.add(runner,'training/reward', loss[3])
+                writer.add(runner,'training/cummulative_reward', cum_reward)
+                writer.add(runner,'training/acc', _)
 
                 #replay_buffer.add(experience)
             
@@ -974,16 +1041,13 @@ def main():
 
     parser = arguments.get_arg_parser('Training Text2Code', 'train')
 
-    #torch.backends.cudnn.enabled = False
-
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
     # Set seed to redo nan error
-    torch.manual_seed(0)
-    np.random.seed(0)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    #set_seed(13)
+    #torch.cuda.set_device(5)
+
     agent_cls = KarelAgent
     env = KarelEditEnv(args)
 

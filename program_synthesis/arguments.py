@@ -15,7 +15,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--dataset_filter_code_length', type=int, default=0)
     parser.add_argument('--dataset_bucket', action='store_true', default=False)
     parser.add_argument('--vocab_min_freq', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=16)#128
+    parser.add_argument('--batch_size', type=int, default=64)#128
     parser.add_argument('--load-sync', action='store_true')
 
     parser.add_argument(
@@ -30,10 +30,10 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--eval_every_n', type=int, default=10000000)#1000
         train_group.add_argument('--eval_n_steps', type=int, default=50)
         train_group.add_argument('--log_interval', type=int, default=100)#20
-        train_group.add_argument('--optimizer', type=str, default='adam') #adam
-        train_group.add_argument('--lr', type=float, default=3e-4) #.001
+        train_group.add_argument('--optimizer', type=str, default='sgd') #adam
+        train_group.add_argument('--lr', type=float, default=3e-6) #.001
         train_group.add_argument('--lr_decay_steps', type=int, default=100000)
-        train_group.add_argument('--lr_decay_rate', type=float, default = None) #0.5
+        train_group.add_argument('--lr_decay_rate', type=float, default = 0.99) #0.5
         train_group.add_argument('--gradient-clip', type=float)
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
         train_group.add_argument('--num_epochs', type=int, default=10)
@@ -50,18 +50,20 @@ def get_arg_parser(title, mode):
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
-        train_group.add_argument('--max_rollout_length', type=int, default=10)
+        train_group.add_argument('--max_rollout_length', type=int, default=1)
         train_group.add_argument('--replay_buffer_size', type=int, default=16384)
         train_group.add_argument('--erase_factor', type=float, default=0.01)
         train_group.add_argument('--num_episodes', type=int, default=150)
         train_group.add_argument('--num_training_steps', type=int, default=50)
-        train_group.add_argument('--ppo_steps', type=int, default=2)
+        train_group.add_argument('--ppo_steps', type=int, default=3)
         train_group.add_argument('--max_grad_norm', type=int, default=0.5)
         train_group.add_argument('--use_clipped_value_loss', default=False)
         train_group.add_argument('--use_code_level_state', default=True)
         train_group.add_argument('--clip_param', type=float, default=0.2)
-        train_group.add_argument('--value_loss_coef', type=float, default=0.05)
-        train_group.add_argument('--entropy_coef', type=float, default=0.01)
+        train_group.add_argument('--value_loss_coef', type=float, default=0.5)
+        train_group.add_argument('--entropy_coef', type=float, default=0.0001)
+        train_group.add_argument('--load_sl_model', type=bool, default=True)
+
 
         train_group.add_argument(
             '--reinforce-step', type=int, default=0,
