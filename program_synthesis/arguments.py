@@ -17,10 +17,17 @@ def get_arg_parser(title, mode):
     parser.add_argument('--vocab_min_freq', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=64)#128
     parser.add_argument('--load-sync', action='store_true')
+    parser.add_argument('--iterative-search', type=str, default=None)
+    parser.add_argument('--iterative-search-step-limit', type=int, default=5)
+    parser.add_argument('--num_placeholders', type=int, default=0)  # 100
+    parser.add_argument('--use_ref_orig', action='store_true')
+
 
     parser.add_argument(
         '--pretrained', type=str, default='', 
-        help='Use format "encoder:path/to/checkpoint,decoder:path/to/other/checkpoint"')
+        help='Use format "entire-model:logdirs/path"')
+    parser.add_argument(
+        '--pretrained-step', type=int, default=None)
 
     if mode == 'train':
         train_group = parser.add_argument_group('train')
@@ -38,7 +45,6 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
         train_group.add_argument('--num_epochs', type=int, default=10)
         train_group.add_argument('--num_units', type=int, default=100)
-        train_group.add_argument('--num_placeholders', type=int, default=0)#100
         train_group.add_argument('--num-att-heads', type=int, default=8)
         train_group.add_argument('--bidirectional', action='store_true', default=False)
         train_group.add_argument('--read-code', dest='read_code', action='store_true', default=False)
@@ -47,6 +53,8 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--read-io', dest='read_io', action='store_true', default=False)
         train_group.add_argument('--skip-io', dest='read_io', action='store_false')
         train_group.add_argument('--io-count', type=int, default=3)
+
+        train_group.add_argument('--train-policy-gradient-loss', action='store_true')
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
@@ -110,6 +118,9 @@ def get_arg_parser(title, mode):
         eval_group.add_argument('--eval-final', action='store_true')
         eval_group.add_argument('--limit', type=int, default=None)
 
+        eval_group.add_argument('--run-predict', action='store_true', default=False)
+        eval_group.add_argument('--predict-path')
+
     infer_group = parser.add_argument_group('infer')
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
     infer_group.add_argument('--max_beam_trees', type=int, default=1)#100
@@ -117,7 +128,11 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--max_eval_trials', type=int)
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
     infer_group.add_argument('--search-bfs', action='store_true', default=True)
-    infer_group.add_argument('--karel-mutate-ref', action='store_true', default=True)
+    infer_group.add_argument('--karel-file-ref-train', help='json file containing a list of dictionaries with keys '
+                                                            'is_correct and output, incorrect examples will be used')
+    infer_group.add_argument('--karel-file-ref-val', help='json file containing a list of dictionaries with keys '
+                                                          'is_correct and output, incorrect examples will be used')
+    infer_group.add_argument('--karel-mutate-ref', action='store_true', default=False)
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
     runtime_group = parser.add_argument_group('runtime')

@@ -201,7 +201,7 @@ class KarelLGRLModel(BaseKarelModel):
                                    output_grids, self.args.max_beam_trees)
 
     def batch_processor(self, for_eval):
-        return KarelLGRLBatchProcessor(self.vocab, for_eval)
+        return KarelLGRLBatchProcessor(self.vocab, for_eval, self.args.train_policy_gradient_loss)
 
 
 KarelLGRLExample = collections.namedtuple(
@@ -210,14 +210,15 @@ KarelLGRLExample = collections.namedtuple(
 
 
 class KarelLGRLBatchProcessor(object):
-    def __init__(self, vocab, for_eval):
+    def __init__(self, vocab, for_eval, train_policy_gradient_loss):
         self.vocab = vocab
         self.for_eval = for_eval
+        self.train_policy_gradient_loss = train_policy_gradient_loss
 
     def __call__(self, batch):
         input_grids, output_grids, code_seqs = encode_grids_and_outputs(
             batch, self.vocab)
-        orig_examples = batch if self.for_eval else None
+        orig_examples = batch if self.for_eval or self.train_policy_gradient_loss else None
         return KarelLGRLExample(input_grids, output_grids, code_seqs,
                                 orig_examples)
 
@@ -242,7 +243,9 @@ class KarelLGRLRefineModel(BaseKarelModel):
         input_grids, output_grids, code_seqs, dec_data, \
                             ref_code, ref_trace_grids, ref_trace_events, \
                             cag_interleave, orig_examples = input_tuple
-        if orig_examples:
+        # TODO before the policy gradient this was impossible to execute since `orig_examples` is None whenever
+        # this is not for_eval. Excluding the policy gradient
+        if orig_examples and not self.args.train_policy_gradient_loss:
             for i, orig_example in  enumerate(orig_examples):
                 self.trace_grid_lengths.append((orig_example.idx, [
                     ref_trace_grids.lengths[ref_trace_grids.sort_to_orig[i * 5
@@ -270,11 +273,58 @@ class KarelLGRLRefineModel(BaseKarelModel):
         io_embed, ref_code_memory, ref_trace_memory = self.model.encode(
             input_grids, output_grids, ref_code, ref_trace_grids,
             ref_trace_events, cag_interleave)
+
+        if self.args.train_policy_gradient_loss:
+            return self.calculate_policy_gradient_loss(input_grids, io_embed, orig_examples, ref_code, ref_code_memory,
+                                                       ref_trace_memory)
+
+        else:
+            return self.calculate_supervised_loss(io_embed, ref_code_memory,
+                                                  ref_trace_memory, code_seqs,
+                                                  dec_data)
+
+    def calculate_supervised_loss(self, io_embed, ref_code_memory,
+                                  ref_trace_memory, code_seqs,
+                                  dec_data):
         logits, labels = self.model.decode(io_embed, ref_code_memory,
                                            ref_trace_memory, code_seqs,
                                            dec_data)
         return self.criterion(
             logits.view(-1, logits.shape[-1]), labels.contiguous().view(-1))
+
+    def calculate_policy_gradient_loss(self, input_grids, io_embed, orig_examples, ref_code, ref_code_memory,
+                                       ref_trace_memory):
+        init_state = self.model.decoder.init_state(
+            ref_code_memory, ref_trace_memory,
+            io_embed.shape[0], io_embed.shape[1])
+        memory = self.model.decoder.prepare_memory(io_embed, ref_code_memory,
+                                                   ref_trace_memory, ref_code)
+        sequences = beam_search.beam_search(
+            len(input_grids),
+            init_state,
+            memory,
+            self.model.decode_token,
+            self.args.max_beam_trees,
+            cuda=self.args.cuda,
+            max_decoder_length=self.args.max_decoder_length,
+            return_beam_search_result=True,
+            volatile=False,
+            differentiable=True
+        )
+        output_code = self.model.decoder.postprocess_output([[x.sequence for x in y] for y in sequences], memory)
+        all_logits = []
+        rewards = []
+        for logit_beam, code_beam, example in zip(sequences, output_code, orig_examples):
+            for i, (logits, code) in enumerate(zip(logit_beam, code_beam)):
+                code = list(map(self.vocab.itos, code))
+                res = executor.evaluate_code(code, example.schema.args, example.input_tests, self.executor.execute)
+                all_logits.append(torch.sum(torch.cat([x.view(1) for x in logits.log_probs_torch])))
+                rewards.append(res['correct'] / res['total'])
+        all_logits = torch.cat([x.view(1) for x in all_logits])
+        rewards = torch.tensor(rewards) - np.mean(rewards)
+        if all_logits.is_cuda:
+            rewards = rewards.cuda()
+        return - rewards @ all_logits
 
     def debug(self, batch):
         code = code_to_tokens(batch.code_seqs.data[0, 1:], self.vocab)
@@ -401,9 +451,10 @@ class KarelLGRLRefineBatchProcessor(object):
                     interleave([[2] * grid_length, trace_interleave],
                                g_ca_interleave))
 
-        orig_examples = batch if self.for_eval else None
+        orig_examples = batch if self.for_eval or self.args.train_policy_gradient_loss else None
 
-        orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy([('<S>',) + item.ref_example.code_sequence +('</S>',) for item in batch], self.vocab.stoi,-1),False,False)
+        if self.args.use_ref_orig:
+            orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy([('<S>',) + item.ref_example.code_sequence +('</S>',) for item in batch], self.vocab.stoi,-1),False,False)
 
         return KarelLGRLRefineExample(
             input_grids, output_grids, code_seqs, dec_data,

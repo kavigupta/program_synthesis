@@ -42,7 +42,7 @@ class BeamSearchState(object):
         raise NotImplementedError
 
 
-BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs'])
+BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs', 'log_probs_torch'])
 
 
 def beam_search(*args, volatile=True, **kwargs):
@@ -60,7 +60,8 @@ def beam_search_(batch_size,
                 cuda=False,
                 max_decoder_length=MAX_DECODER_LENGTH,
                 return_attention=False,
-                return_beam_search_result=False):
+                return_beam_search_result=False,
+                differentiable=False):
     # enc: batch size x hidden size
     # memory: batch size x sequence length x hidden size
     tt = torch.cuda if cuda else torch
@@ -70,7 +71,7 @@ def beam_search_(batch_size,
         batch_size, 1).fill_(0))
     prev_hidden = enc
     finished = [[] for _ in range(batch_size)]
-    result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0)
+    result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[])
                for _ in range(beam_size)] for _ in range(batch_size)]
     batch_finished = [False for _ in range(batch_size)]
     # b_idx: 0, ..., 0, 1, ..., 1, ..., b, ..., b
@@ -131,17 +132,27 @@ def beam_search_(batch_size,
                 kidx = k_idx[batch_id, idx]
                 # print(step, batch_id, idx, 'token', token, kidx, 'prev', prev_result[batch_id][kidx], prev_probs.data[batch_id][idx])
                 if token == 1:  # 1 == </S>
+                    if differentiable:
+                        log_probs_torch = prev_result[batch_id][kidx].log_probs_torch + [log_probs[batch_id, kidx, token]]
+                    else:
+                        log_probs_torch = None
                     finished[batch_id].append(BeamSearchResult(
                         sequence=prev_result[batch_id][kidx].sequence,
                         total_log_prob=prev_probs_np[batch_id, idx],
-                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]]))
-                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0))
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=log_probs_torch))
+                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[]))
                     prev_probs.data[batch_id][idx] = float('-inf')
                 else:
+                    if differentiable:
+                        log_probs_torch = prev_result[batch_id][kidx].log_probs_torch + [log_probs[batch_id, kidx, token]]
+                    else:
+                        log_probs_torch = None
                     result[batch_id].append(BeamSearchResult(
                         sequence=prev_result[batch_id][kidx].sequence + [token],
                         total_log_prob=prev_probs_np[batch_id, idx],
-                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]]))
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=log_probs_torch))
                     can_stop = False
             if len(finished[batch_id]) >= beam_size:
                 # Sort and clip.
