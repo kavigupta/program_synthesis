@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from collections import defaultdict
+
 from datasets.executor import evaluate_code
 from datasets.karel import mutation
 
@@ -73,7 +75,8 @@ class Strategy(ABC):
         start, *rest = descriptor.split(":")
         kwargs = eval("dict({})".format(":".join(*rest)))
         return {
-            'greedy': lambda: GreedyStrategy
+            'greedy': lambda: GreedyStrategy,
+            'best_first': lambda: BestFirstSearch
         }[start](**kwargs)
 
 
@@ -97,6 +100,14 @@ class TimeLimitStrategy(Strategy):
         return decision, node
 
 
+def valid(considered_program, result):
+    if not considered_program:
+        return False
+    if result['syntax-error'] > 0:
+        return False
+    return True
+
+
 class GreedyStrategy(Strategy):
     def __init__(self, item):
         self.seen = set()
@@ -106,12 +117,10 @@ class GreedyStrategy(Strategy):
         unseen = []
         for considered in inference_result.info['candidates']:
             considered = tuple(considered)
-            if not considered:
-                continue
             if considered in self.seen:
                 continue
             res = evaluate(considered)
-            if res['syntax-error'] > 0:
+            if not valid(considered, res):
                 continue
             if res['correct'] == res['total']:
                 return 'accept', considered
@@ -121,3 +130,26 @@ class GreedyStrategy(Strategy):
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
         return 'expand', unseen[0][1]
+
+
+class BestFirstSearch(Strategy):
+    def __init__(self, item):
+        self.seen = set()
+        self.by_number_correct = defaultdict(list)
+
+    def decide(self, inference_result, evaluate):
+        for considered in inference_result.info['candidates']:
+            considered = tuple(considered)
+            if considered in self.seen:
+                continue
+            res = evaluate(considered)
+            if not valid(considered, res):
+                continue
+            if res['correct'] == res['total']:
+                return 'accept', considered
+            self.by_number_correct[res['correct']].append(considered)
+
+        for n_correct in sorted(self.by_number_correct, reverse=True):
+            if self.by_number_correct[n_correct]:
+                return 'expand', self.by_number_correct[n_correct].pop(0)
+        return 'accept', tuple(inference_result.info['candidates'])
