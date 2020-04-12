@@ -34,7 +34,8 @@ def valid_modes_and_params():
         elif mode == 'real':
             yield mode, '', ''
             for limit in 1, 5, 10:
-                yield mode, ('greedy', limit), "greedy,,{}".format(limit)
+                for strategy in 'greedy', 'best_first':
+                    yield mode, (strategy, limit), "{},,{}".format(strategy, limit)
         else:
             assert False
 
