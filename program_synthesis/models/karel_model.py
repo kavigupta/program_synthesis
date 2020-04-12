@@ -324,7 +324,7 @@ class KarelLGRLRefineModel(BaseKarelModel):
         rewards = torch.tensor(rewards) - np.mean(rewards)
         if all_logits.is_cuda:
             rewards = rewards.cuda()
-        return - rewards @ all_logits
+        return - (rewards * all_logits).mean()
 
     def debug(self, batch):
         code = code_to_tokens(batch.code_seqs.data[0, 1:], self.vocab)
