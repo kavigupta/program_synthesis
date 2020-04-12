@@ -50,7 +50,7 @@ class KarelEditEnv(object):
             data.load_vocab(dataset.relpath('../data/karel/word.vocab')), 0)
 
         self.refiner = karel_model.KarelLGRLRefineBatchProcessor(args, self.vocab, False)
-        self.dataset_loader = dataset.get_karel_dataset_nomodel(args, self.refiner)
+        self.dataset_loader, self.devset_loader = dataset.get_karel_dataset_nomodel(args, self.refiner)
 
         self.data_iter = self.dataset_loader.__iter__()
         self._cur_env = None
@@ -438,7 +438,7 @@ class KarelAgent(object):
         self.vocab = env.vocab
         self.model = KarelEditPolicy(args)
         self.criterion = nn.MSELoss()
-        self.optimizer = RAdam(self.model.model.model.parameters(), lr=args.lr)
+        self.optimizer = optim.SGD(self.model.model.model.parameters(), lr=args.lr) #RAdam(self.model.model.model.parameters(), lr=args.lr)
         if not args.use_code_level_state:
             self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
         else:
@@ -505,6 +505,16 @@ def rollout(env, state, agent, epsilon_greedy, max_rollout_length):
             break
     return success, experience
 
+def print_stats(epoch, i, loss, _, errors, cum_reward):
+    print('epoch {}'.format(epoch))
+    print('i {}'.format(i))
+    print('training/action_loss {}'.format(loss[0]))
+    print('training/value_loss {}'.format(loss[1]))
+    print('training/entropy {}'.format(loss[2]))
+    print('training/reward {}'.format(loss[3]))
+    print('training/acc {}'.format(_))
+    print('errors {}'.format(errors))
+    print('training/cummulative_reward {}'.format(cum_reward))
 
 class PolicyTrainer(object):
 
@@ -992,15 +1002,14 @@ class PolicyTrainer(object):
 
     def train(self):
         if self.args.load_sl_model:
-            self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',self.args.cuda, int(930100))
-        writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
-        replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
+            self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',self.args.cuda, int(1769300))
+        #writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
+        #replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         errors = 0
         runner = 0
         cum_reward = 0
         for epoch in range(self.args.num_epochs):
             for i, batch in enumerate(self.env.dataset_loader):
-            #for i in range(self.args.num_episodes):
                 with torch.no_grad():
                     try:
                         _, experience = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length)
@@ -1009,22 +1018,30 @@ class PolicyTrainer(object):
                         continue
                 runner+=1*self.args.batch_size
                 loss = self.Program_PPO_update(experience)
-                print('epoch {}'.format(epoch))
-                print('i {}'.format(i))
-                print('training/action_loss {}'.format(loss[0]))
-                print('training/value_loss {}'.format(loss[1]))
-                print('training/entropy {}'.format(loss[2]))
-                print('training/reward {}'.format(loss[3]))
-                print('training/acc {}'.format(_))
-                print('errors {}'.format(errors))
                 cum_reward += loss[3]
-                print('training/cummulative_reward {}'.format(cum_reward))
-                writer.add(runner,'training/action_loss', loss[0])
-                writer.add(runner,'training/value_loss', loss[1])
-                writer.add(runner,'training/entropy', loss[2])
-                writer.add(runner,'training/reward', loss[3])
-                writer.add(runner,'training/cummulative_reward', cum_reward)
-                writer.add(runner,'training/acc', _)
+                print_stats(epoch, i, loss, _, errors,cum_reward)
+                
+                #writer.add(runner,'training/action_loss', loss[0])
+                #writer.add(runner,'training/value_loss', loss[1])
+                #writer.add(runner,'training/entropy', loss[2])
+                #writer.add(runner,'training/reward', loss[3])
+                #writer.add(runner,'training/cummulative_reward', cum_reward)
+                #writer.add(runner,'training/acc', _)
+
+                # Exact eval
+                if  i % args.eval_every_n == 0:
+                    self.actor_critic.model.eval()
+                    stats = {'correct': 0, 'total': 0}
+                    for dev_idx, dev_batch in enumerate(self.env.devset_loader):
+                        batch_res = self.actor_critic.model.model.eval(dev_batch)
+                        stats['correct'] += batch_res['correct']
+                        stats['total'] += batch_res['total']
+                        if dev_idx > self.args.eval_n_steps:
+                            break
+                    accuracy = float(stats['correct']) / stats['total']
+                    print("Dev accuracy: %.5f" % accuracy)
+                    #reporter.record(m.last_step, **{'accuracy/dev': accuracy})
+                    self.actor_critic.model.train()
 
                 #replay_buffer.add(experience)
             
@@ -1032,8 +1049,8 @@ class PolicyTrainer(object):
             #    batch = replay_buffer.sample(1)
 
             if (epoch + 1) % 1 == 0:
-            #if i%int(self.args.num_episodes/2) ==0:
                 saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, epoch, self.args.model_dir)
+
 
 
 

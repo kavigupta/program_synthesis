@@ -20,14 +20,14 @@ def get_arg_parser(title, mode):
     parser.add_argument('--iterative-search', type=str, default=None)
     parser.add_argument('--iterative-search-step-limit', type=int, default=5)
     parser.add_argument('--num_placeholders', type=int, default=0)  # 100
-    parser.add_argument('--use_ref_orig', action='store_true')
+    parser.add_argument('--use_ref_orig', action='store_true') # False
 
 
     parser.add_argument(
-        '--pretrained', type=str, default='', 
+        '--pretrained', type=str, default='entire-model::/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000', 
         help='Use format "entire-model:logdirs/path"')
     parser.add_argument(
-        '--pretrained-step', type=int, default=None)
+        '--pretrained-step', type=int, default=1769300)
 
     if mode == 'train':
         train_group = parser.add_argument_group('train')
@@ -54,7 +54,7 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--skip-io', dest='read_io', action='store_false')
         train_group.add_argument('--io-count', type=int, default=3)
 
-        train_group.add_argument('--train-policy-gradient-loss', action='store_true')
+        train_group.add_argument('--train-policy-gradient-loss', action='store_true', default=True)
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
@@ -123,7 +123,7 @@ def get_arg_parser(title, mode):
 
     infer_group = parser.add_argument_group('infer')
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
-    infer_group.add_argument('--max_beam_trees', type=int, default=1)#100
+    infer_group.add_argument('--max_beam_trees', type=int, default=4)#100
     infer_group.add_argument('--max_beam_iter', type=int, default=1000)
     infer_group.add_argument('--max_eval_trials', type=int)
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
@@ -132,12 +132,12 @@ def get_arg_parser(title, mode):
                                                             'is_correct and output, incorrect examples will be used')
     infer_group.add_argument('--karel-file-ref-val', help='json file containing a list of dictionaries with keys '
                                                           'is_correct and output, incorrect examples will be used')
-    infer_group.add_argument('--karel-mutate-ref', action='store_true', default=False)
+    infer_group.add_argument('--karel-mutate-ref', action='store_true', default=True) # False
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
     runtime_group = parser.add_argument_group('runtime')
     runtime_group.add_argument(
-        '--restore-map-to-cpu', action='store_true', default=False)
+        '--restore-map-to-cpu', action='store_true', default=True)#False
 
     return parser
 

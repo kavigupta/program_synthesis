@@ -522,8 +522,10 @@ def get_karel_dataset_nomodel(args, KarelLGRLRefineBatchProcessor=None):
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
         train_mutator = KarelExampleMutator(mutation_dist, rng_fixed=False,
                 add_trace=args.karel_trace_enc != 'none')
+        dev_mutator = KarelExampleMutator(mutation_dist, rng_fixed=False,
+                add_trace=args.karel_trace_enc != 'none')
     else:
-        train_mutator = lambda x: x
+        train_mutator = dev_mutator = lambda x: x
     if KarelLGRLRefineBatchProcessor == None:
         KarelLGRLRefineBatchProcessor = lambda x: x
 
@@ -535,7 +537,15 @@ def get_karel_dataset_nomodel(args, KarelLGRLRefineBatchProcessor=None):
         collate_fn=KarelLGRLRefineBatchProcessor,
         num_workers=0 if args.load_sync else 4,
         pin_memory=False)
-    return train_data
+    dev_data = torch.utils.data.DataLoader(
+        KarelTorchDataset(
+            relpath('../data/karel/val{}.pkl'.format(suffix)),
+            dev_mutator),
+        args.batch_size,
+        collate_fn=KarelLGRLRefineBatchProcessor,
+        num_workers=0 if args.load_sync else 2,
+        pin_memory=False)
+    return train_data, dev_data
     #
 
 
