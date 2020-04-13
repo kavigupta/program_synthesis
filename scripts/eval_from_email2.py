@@ -9,6 +9,7 @@ def valid_checkpoints():
     for logdir in glob.glob('logdirs/**/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
+        numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
                 time_delta = time.time() - os.path.getmtime(ckpt)
@@ -22,7 +23,9 @@ def valid_checkpoints():
             cm100 = ckpt_number - 100
             if (cm100 % 50000 != 0 and cm100 % 10000 == 0) or ckpt_number < 1000:
                 continue
-            yield logdir, ckpt_number
+            numbers.append(ckpt_number)
+        for ckpt_number in numbers:
+            yield (logdir, ckpt_number), ckpt_number == max(numbers)
 
 
 def valid_modes_and_params():
@@ -30,12 +33,13 @@ def valid_modes_and_params():
         if mode in {'train', 'eval'}:
             params = '1', '0,1', '0,0,1'
             for param in params:
-                yield mode, param, param
+                yield (mode, param, param), 'always'
         elif mode == 'real':
-            yield mode, '', ''
+            yield (mode, '', ''), 'always'
             for limit in 1, 5, 10, 25:
                 for strategy in 'greedy', 'best_first':
-                    yield mode, (strategy, limit), "{},,{}".format(strategy, limit)
+                    when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
+                    yield (mode, (strategy, limit), "{},,{}".format(strategy, limit)), when
         else:
             assert False
 
@@ -51,12 +55,15 @@ def already_executed(output_path):
 
 
 def main():
-    for logdir, ckpt_number in valid_checkpoints():
-        for mode, param, render_param in valid_modes_and_params():
+    for (logdir, ckpt_number), is_last in valid_checkpoints():
+        for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
             if already_executed(output_path):
+                continue
+
+            if when != 'always' and not is_last:
                 continue
 
             command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref '
