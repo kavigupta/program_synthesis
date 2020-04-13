@@ -33,7 +33,7 @@ def valid_modes_and_params():
                 yield mode, param, param
         elif mode == 'real':
             yield mode, '', ''
-            for limit in 1, 5, 10:
+            for limit in 1, 5, 10, 25:
                 for strategy in 'greedy', 'best_first':
                     yield mode, (strategy, limit), "{},,{}".format(strategy, limit)
         else:
