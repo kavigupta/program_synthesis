@@ -322,7 +322,9 @@ class KarelLGRLRefineModel(BaseKarelModel):
                 rewards.append(res['correct'] / res['total'])
         all_logits = torch.cat([x.view(1) for x in all_logits])
         print(np.mean(rewards))
-        rewards = torch.tensor(rewards) - np.mean(rewards)
+        rewards = torch.tensor(rewards)
+        if not self.args.no_baseline:
+            rewards = rewards - np.mean(rewards)
         if all_logits.is_cuda:
             rewards = rewards.cuda()
         return - (rewards * all_logits).mean()
