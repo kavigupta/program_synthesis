@@ -3,6 +3,7 @@ import json
 import os
 import os.path
 import time
+import argparse
 
 
 def valid_checkpoints():
@@ -54,16 +55,14 @@ def already_executed(output_path):
     return done
 
 
-def main():
+def main(args):
+    low_priority = []
     for (logdir, ckpt_number), is_last in valid_checkpoints():
         for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
             if already_executed(output_path):
-                continue
-
-            if when != 'always' and not is_last:
                 continue
 
             command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref '
@@ -89,7 +88,15 @@ def main():
 
             command += ' '
 
-            print(command)
+            if when != 'always' and not is_last:
+                low_priority.append(command)
+            else:
+                print(command)
+    for command in low_priority[:args.num_low_priority]:
+        print(command)
 
 
-main()
+parser = argparse.ArgumentParser()
+parser.add_argument('--num-low-priority', type=int, default=0)
+
+main(parser.parse_args())
