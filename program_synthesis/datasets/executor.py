@@ -23,10 +23,10 @@ class ExecutorRuntimeException(Exception):
 
 def evaluate_code(code, arguments, tests, do_execute):
     stats = {'total': len(tests), 'correct': 0, 'exceptions': 0,
-             'result-none': 0, 'syntax-error': 0, 'runtime-exception': 0}
+             'result-none': 0, 'syntax-error': 0, 'runtime-exception': 0, 'individual' : [0] * len(tests)}
     if not code:
         return stats
-    for test in tests:
+    for test_idx, test in enumerate(tests):
         try:
             execution_result = do_execute(code, arguments, test['input'])
         except ExecutorSyntaxException:
@@ -45,6 +45,7 @@ def evaluate_code(code, arguments, tests, do_execute):
             stats['result-none'] += 1
         if execution_result.result == test['output']:
             stats['correct'] += 1
+            stats['individual'][test_idx] = 1
     return stats
 
 
