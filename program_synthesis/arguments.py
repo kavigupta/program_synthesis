@@ -122,7 +122,7 @@ def get_arg_parser(title, mode):
         eval_group.add_argument('--run-predict', action='store_true', default=False)
         eval_group.add_argument('--predict-path')
 
-        eval_group.add_argument('--evalauate-on-all', action='store_true',
+        eval_group.add_argument('--evaluate-on-all', action='store_true',
                                 help="evaluate on all 6 examples, not just the held out one")
 
     infer_group = parser.add_argument_group('infer')
