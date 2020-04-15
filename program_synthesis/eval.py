@@ -43,13 +43,14 @@ def evaluate(args):
         inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
                                     args.karel_trace_enc != 'none', m.batch_processor(for_eval=True))
     if args.run_predict:
-        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path)
+        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path, evaluate_on_all=args.evaluate_on_all)
     else:
         evaluation.run_eval(
             args.tag, eval_dataset, inference,
             current_executor.execute, not args.hide_example_info,
             args.report_path,
-            limit=args.limit)
+            limit=args.limit,
+            evaluate_on_all=args.evaluate_on_all)
 
 
 if __name__ == "__main__":

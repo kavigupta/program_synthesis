@@ -140,7 +140,7 @@ class EvalReport(object):
             self.show_example(example, res, st)
 
 
-def run_predict(dataset, inference, do_execute, inference_output_path):
+def run_predict(dataset, inference, do_execute, inference_output_path, evaluate_on_all=False):
     """Runs inference of given model on eval set, and executes resulting code.
 
     Args:
@@ -159,12 +159,20 @@ def run_predict(dataset, inference, do_execute, inference_output_path):
     for batch in pdataset:
         results = inference(batch)
         for res, example in zip(results, batch.orig_examples):
-            stats = executor.evaluate_code(res.code_sequence, example.schema.args, example.tests, do_execute)
-            predictions.append(dict(
+            tests = []
+            if evaluate_on_all:
+                tests += list(example.input_tests)
+            tests += list(example.tests)
+            stats = executor.evaluate_code(res.code_sequence, example.schema.args, tests, do_execute)
+            prediction = dict(
                 output=res.info['candidates'][0],
-                is_correct=stats['correct']
-            ))
-            success += stats['correct'] > 0
+                is_correct=stats['correct'] == stats['total'],
+                individual=stats['individual']
+            )
+            if evaluate_on_all:
+                prediction['passes_given_tests'] = all(stats['individual'][:len(example.input_tests)])
+            predictions.append(prediction)
+            success += stats['correct'] == stats['total']
             total += 1
             pdataset.set_description("Accuracy: {:.2f}%".format(success / total * 100))
     with open(inference_output_path, "w") as f:
@@ -179,7 +187,7 @@ def limited(dataset, limit):
         yield batch
 
 def run_eval(tag, dataset, inference, do_execute, show_info=True,
-        report_path=None, limit=None):
+        report_path=None, limit=None, evaluate_on_all=False):
     """Runs inference of given model on eval set, and executes resulting code.
 
     Args:
@@ -196,8 +204,12 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
             start = time.time()
             results = inference(batch)
             for res, example in zip(results, batch.orig_examples):
+                tests = []
+                if evaluate_on_all:
+                    tests += list(example.input_tests)
+                tests += list(example.tests)
                 stats = executor.evaluate_code(
-                    res.code_tree if res.code_tree else res.code_sequence, example.schema.args, example.tests, do_execute)
+                    res.code_tree if res.code_tree else res.code_sequence, example.schema.args, tests, do_execute)
                 report.add_example(example, res, stats)
             print("[Eval] Elapsed time for %d examples: %f" %
                     (len(batch.orig_examples), time.time() - start))
