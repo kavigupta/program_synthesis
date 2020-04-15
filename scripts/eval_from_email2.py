@@ -88,6 +88,9 @@ def main(args):
 
             command += ' '
 
+            if args.cpu:
+                command += '--restore-map-to-cpu --no-cuda '
+
             if when != 'always' and not is_last:
                 low_priority.append(command)
             else:
@@ -98,5 +101,6 @@ def main(args):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-low-priority', type=int, default=0)
+parser.add_argument('--cpu', action='store_true')
 
 main(parser.parse_args())
