@@ -25,8 +25,9 @@ def valid_checkpoints():
             if (cm100 % 50000 != 0 and cm100 % 10000 == 0) or ckpt_number < 1000:
                 continue
             numbers.append(ckpt_number)
-        for ckpt_number in numbers:
-            yield (logdir, ckpt_number), ckpt_number == max(numbers)
+        numbers.sort(reverse=True)
+        for idx, ckpt_number in enumerate(numbers):
+            yield (logdir, ckpt_number), idx
 
 
 def valid_modes_and_params():
@@ -57,7 +58,7 @@ def already_executed(output_path):
 
 def main(args):
     low_priority = []
-    for (logdir, ckpt_number), is_last in valid_checkpoints():
+    for (logdir, ckpt_number), index_last in valid_checkpoints():
         for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
@@ -91,7 +92,7 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if when != 'always' and not is_last:
+            if when != 'always' and index_last != 0:
                 low_priority.append(command)
             else:
                 print(command)
