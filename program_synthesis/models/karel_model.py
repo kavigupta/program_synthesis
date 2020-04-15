@@ -151,6 +151,8 @@ class BaseKarelModel(BaseCodeModel):
 class KarelLGRLModel(BaseKarelModel):
     def __init__(self, args):
         self.args = args
+        if not hasattr(self.args, 'train_policy_gradient_loss'):
+            self.args.train_policy_gradient_loss = False
         self.vocab = data.PlaceholderVocab(
             data.load_vocab(args.word_vocab), self.args.num_placeholders)
         self.model = karel.LGRLKarel(
