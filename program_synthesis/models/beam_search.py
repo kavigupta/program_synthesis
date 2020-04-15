@@ -96,7 +96,8 @@ def beam_search_(batch_size,
         log_probs_flat = total_log_probs.view(batch_size, -1)
         # indices: batch size x beam size
         # Each entry is in [0, beam_size * vocab_size)
-        prev_probs, indices = log_probs_flat.topk(min(beam_size, log_probs_flat.size(1)), dim=1)
+        actual_beam_size = min(beam_size, log_probs_flat.size(1))
+        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
         # prev_tokens: batch_size * beam size
         # Each entry indicates which token should be added to each beam.
         prev_tokens = (indices % logit_size).view(-1)
@@ -105,7 +106,14 @@ def beam_search_(batch_size,
         # k_idx: batch size x beam size
         # Each entry is in [0, beam_size), indicating which beam to extend.
         k_idx = (indices / logit_size)
-        idx = torch.stack([b_idx, k_idx.view(-1)])
+
+        if beam_size == actual_beam_size:
+            b_idx_to_use = b_idx
+        else:
+            b_idx_to_use = Variable(
+                torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, actual_beam_size).view(-1))
+
+        idx = torch.stack([b_idx_to_use, k_idx.view(-1)])
         # prev_hidden: (batch size * beam size) x hidden size
         # Contains the hidden states which produced the top-k (k = beam size)
         # tokens, and should be extended in the step.
@@ -127,7 +135,7 @@ def beam_search_(batch_size,
                 if finished[batch_id][-1].total_log_prob > prev_probs_np[batch_id, 0]:
                     batch_finished[batch_id] = True
                     continue
-            for idx in range(beam_size):
+            for idx in range(actual_beam_size):
                 token = indices[batch_id, idx] % logit_size
                 kidx = k_idx[batch_id, idx]
                 # print(step, batch_id, idx, 'token', token, kidx, 'prev', prev_result[batch_id][kidx], prev_probs.data[batch_id][idx])
