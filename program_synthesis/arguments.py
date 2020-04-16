@@ -56,6 +56,7 @@ def get_arg_parser(title, mode):
 
         train_group.add_argument('--train-policy-gradient-loss', action='store_true')
         train_group.add_argument('--no-baseline', action='store_true')
+        train_group.add_argument('--use-held-out-test-for-rl', action='store_true')
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
