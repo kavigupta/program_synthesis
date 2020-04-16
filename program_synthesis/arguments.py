@@ -31,15 +31,15 @@ def get_arg_parser(title, mode):
 
     if mode == 'train':
         train_group = parser.add_argument_group('train')
-        train_group.add_argument('--save_every_n', type=int, default=100)
-        train_group.add_argument('--keep_every_n', type=int, default=10000)#10000000
+        train_group.add_argument('--save_every_n', type=int, default=50000)
+        train_group.add_argument('--keep_every_n', type=int, default=10000000)
         train_group.add_argument('--debug_every_n', type=int, default=1000)#20
-        train_group.add_argument('--eval_every_n', type=int, default=10000000)#1000
+        train_group.add_argument('--eval_every_n', type=int, default=2500)#10000000
         train_group.add_argument('--eval_n_steps', type=int, default=50)
         train_group.add_argument('--log_interval', type=int, default=100)#20
         train_group.add_argument('--optimizer', type=str, default='sgd') #adam
-        train_group.add_argument('--lr', type=float, default=3e-6) #.001
-        train_group.add_argument('--lr_decay_steps', type=int, default=100000)
+        train_group.add_argument('--lr', type=float, default=0.1) #.001
+        train_group.add_argument('--lr_decay_steps', type=int, default=None)
         train_group.add_argument('--lr_decay_rate', type=float, default = 0.99) #0.5
         train_group.add_argument('--gradient-clip', type=float)
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
@@ -58,7 +58,7 @@ def get_arg_parser(title, mode):
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
-        train_group.add_argument('--max_rollout_length', type=int, default=1)
+        train_group.add_argument('--max_rollout_length', type=int, default=3)
         train_group.add_argument('--replay_buffer_size', type=int, default=16384)
         train_group.add_argument('--erase_factor', type=float, default=0.01)
         train_group.add_argument('--num_episodes', type=int, default=150)
@@ -66,9 +66,8 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--ppo_steps', type=int, default=3)
         train_group.add_argument('--max_grad_norm', type=int, default=0.5)
         train_group.add_argument('--use_clipped_value_loss', default=False)
-        train_group.add_argument('--use_code_level_state', default=True)
         train_group.add_argument('--clip_param', type=float, default=0.2)
-        train_group.add_argument('--value_loss_coef', type=float, default=0.5)
+        train_group.add_argument('--value_loss_coef', type=float, default=0.01)
         train_group.add_argument('--entropy_coef', type=float, default=0.0001)
         train_group.add_argument('--load_sl_model', type=bool, default=True)
 
@@ -123,7 +122,7 @@ def get_arg_parser(title, mode):
 
     infer_group = parser.add_argument_group('infer')
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
-    infer_group.add_argument('--max_beam_trees', type=int, default=4)#100
+    infer_group.add_argument('--max_beam_trees', type=int, default=1)#100
     infer_group.add_argument('--max_beam_iter', type=int, default=1000)
     infer_group.add_argument('--max_eval_trials', type=int)
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)

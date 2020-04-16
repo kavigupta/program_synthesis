@@ -108,7 +108,7 @@ class BaseKarelModel(BaseCodeModel):
         correct = 0
         code_seqs = batch.code_seqs.cpu()
         for code_seq, res in zip(code_seqs, results):
-            code_tokens = code_to_tokens(code_seq.data[1:], self.vocab)
+            code_tokens = code_to_tokens(list(np.array(code_seq.data[1:])), self.vocab)
             if code_tokens == res.code_sequence:
                 correct += 1
         return {'correct': correct, 'total': len(code_seqs)}
