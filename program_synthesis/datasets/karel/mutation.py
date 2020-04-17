@@ -361,7 +361,7 @@ class KarelIncorrectExampleMutator(object):
         parser = KarelForSynthesisParser()
 
         def can_be_used(x):
-            if x['is_correct']:
+            if x['passes_given_tests']:
                 return False
             try:
                 parser.parse(tuple(x['output']), debug=False)

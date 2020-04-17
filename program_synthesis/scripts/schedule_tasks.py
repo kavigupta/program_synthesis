@@ -45,6 +45,7 @@ class TaskRunner:
         return None
 
     def step(self):
+        self.pbar.set_description("Using GPUs {}".format(set(self.current_processes)))
         self.pbar.refresh()
         self.handle_done()
         if len(self.current_processes) >= self.max_procs:
@@ -55,7 +56,6 @@ class TaskRunner:
         if not self.tasks:
             return
         self.current_processes[gpu] = run_on_gpu(gpu, self.tasks.pop())
-        self.pbar.set_description("Using GPUs {}".format(set(self.current_processes)))
 
     def run_all(self):
         try:

@@ -151,6 +151,8 @@ class BaseKarelModel(BaseCodeModel):
 class KarelLGRLModel(BaseKarelModel):
     def __init__(self, args):
         self.args = args
+        if not hasattr(self.args, 'train_policy_gradient_loss'):
+            self.args.train_policy_gradient_loss = False
         self.vocab = data.PlaceholderVocab(
             data.load_vocab(args.word_vocab), self.args.num_placeholders)
         self.model = karel.LGRLKarel(
@@ -317,12 +319,20 @@ class KarelLGRLRefineModel(BaseKarelModel):
         for logit_beam, code_beam, example in zip(sequences, output_code, orig_examples):
             for i, (logits, code) in enumerate(zip(logit_beam, code_beam)):
                 code = list(map(self.vocab.itos, code))
-                res = executor.evaluate_code(code, example.schema.args, example.input_tests, self.executor.execute)
                 all_logits.append(torch.sum(torch.cat([x.view(1) for x in logits.log_probs_torch])))
-                rewards.append(res['correct'] / res['total'])
+                run_cases = lambda tests: executor.evaluate_code(code, example.schema.args, tests,
+                                                                 self.executor.execute)
+                input_tests = run_cases(example.input_tests)
+                reward = input_tests['correct'] / input_tests['total']
+                if self.args.use_held_out_test_for_rl:
+                    held_out_test = run_cases(example.tests)
+                    reward += held_out_test['correct']  # worth as much as all the other ones combined
+                rewards.append(reward)
         all_logits = torch.cat([x.view(1) for x in all_logits])
         print(np.mean(rewards))
-        rewards = torch.tensor(rewards) - np.mean(rewards)
+        rewards = torch.tensor(rewards)
+        if not self.args.no_baseline:
+            rewards = rewards - np.mean(rewards)
         if all_logits.is_cuda:
             rewards = rewards.cuda()
         return - (rewards * all_logits).mean()

@@ -147,9 +147,11 @@ class BestFirstSearch(Strategy):
                 continue
             if res['correct'] == res['total']:
                 return 'accept', considered
+            self.seen.add(considered)
             self.by_number_correct[res['correct']].append(considered)
 
         for n_correct in sorted(self.by_number_correct, reverse=True):
             if self.by_number_correct[n_correct]:
                 return 'expand', self.by_number_correct[n_correct].pop(0)
-        return 'accept', tuple(inference_result.info['candidates'])
+
+        return 'accept', tuple(inference_result.info['candidates'][0])

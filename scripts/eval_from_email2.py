@@ -3,12 +3,14 @@ import json
 import os
 import os.path
 import time
+import argparse
 
 
 def valid_checkpoints():
     for logdir in glob.glob('logdirs/**/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
+        numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
                 time_delta = time.time() - os.path.getmtime(ckpt)
@@ -22,7 +24,10 @@ def valid_checkpoints():
             cm100 = ckpt_number - 100
             if (cm100 % 50000 != 0 and cm100 % 10000 == 0) or ckpt_number < 1000:
                 continue
-            yield logdir, ckpt_number
+            numbers.append(ckpt_number)
+        numbers.sort(reverse=True)
+        for idx, ckpt_number in enumerate(numbers):
+            yield (logdir, ckpt_number), idx
 
 
 def valid_modes_and_params():
@@ -30,12 +35,13 @@ def valid_modes_and_params():
         if mode in {'train', 'eval'}:
             params = '1', '0,1', '0,0,1'
             for param in params:
-                yield mode, param, param
+                yield (mode, param, param), 'always'
         elif mode == 'real':
-            yield mode, '', ''
-            for limit in 1, 5, 10:
+            yield (mode, '', ''), 'always'
+            for limit in 1, 5, 10, 25:
                 for strategy in 'greedy', 'best_first':
-                    yield mode, (strategy, limit), "{},,{}".format(strategy, limit)
+                    when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
+                    yield (mode, (strategy, limit), "{},,{}".format(strategy, limit)), when
         else:
             assert False
 
@@ -50,9 +56,10 @@ def already_executed(output_path):
     return done
 
 
-def main():
-    for logdir, ckpt_number in valid_checkpoints():
-        for mode, param, render_param in valid_modes_and_params():
+def main(args):
+    low_priority = []
+    for (logdir, ckpt_number), index_last in valid_checkpoints():
+        for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
@@ -82,7 +89,19 @@ def main():
 
             command += ' '
 
-            print(command)
+            if args.cpu:
+                command += '--restore-map-to-cpu --no-cuda '
+
+            if when != 'always' and index_last != 0:
+                low_priority.append(command)
+            else:
+                print(command)
+    for command in low_priority[:args.num_low_priority]:
+        print(command)
 
 
-main()
+parser = argparse.ArgumentParser()
+parser.add_argument('--num-low-priority', type=int, default=0)
+parser.add_argument('--cpu', action='store_true')
+
+main(parser.parse_args())

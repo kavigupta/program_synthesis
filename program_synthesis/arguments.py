@@ -55,7 +55,9 @@ def get_arg_parser(title, mode):
         train_group.add_argument('--skip-io', dest='read_io', action='store_false')
         train_group.add_argument('--io-count', type=int, default=3)
 
-        train_group.add_argument('--train-policy-gradient-loss', action='store_true', default=True)
+        train_group.add_argument('--train-policy-gradient-loss', action='store_true')
+        train_group.add_argument('--no-baseline', action='store_true')
+        train_group.add_argument('--use-held-out-test-for-rl', action='store_true')
 
         # REINFORCE.
         train_group.add_argument('--reinforce', action='store_true', default=False)
@@ -120,6 +122,9 @@ def get_arg_parser(title, mode):
 
         eval_group.add_argument('--run-predict', action='store_true', default=False)
         eval_group.add_argument('--predict-path')
+
+        eval_group.add_argument('--evaluate-on-all', action='store_true',
+                                help="evaluate on all 6 examples, not just the held out one")
 
     infer_group = parser.add_argument_group('infer')
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
