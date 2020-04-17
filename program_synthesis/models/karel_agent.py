@@ -397,7 +397,7 @@ class KarelAgent(object):
         if args.optimizer == 'sgd':
             self.optimizer = optim.SGD(self.model.model.model.parameters(), lr=args.lr)
         elif args.optimizer == 'adam':
-            self.optimizer = optim.AdamW(self.model.model.model.parameters(), lr=args.lr, weight_decay=0.001)
+            self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
         else:
             self.optimizer = RAdam(self.model.model.model.parameters(), lr=args.lr, eps=1e-10, weight_decay=0.001)
         self.critic = nn.Linear(512*3, 1, bias=False).cuda() if args.cuda else nn.Linear(512*3, 1, bias=False)
@@ -832,14 +832,15 @@ class PolicyTrainer(object):
                     accuracy = float(stats['correct']) / stats['total']
                     print("Dev accuracy: %.5f" % accuracy)
                     self.actor_critic.model.train()
+                writer.add(runner,'eval/acc', accuracy)
 
                 #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):
             #    batch = replay_buffer.sample(1)
 
-            if i % self.args.save_every_n == 0:
-                saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, epoch, self.args.model_dir)
+                if i % self.args.eval_every_n == 0:
+                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, epoch, self.args.model_dir+self.args.model_nickname)
 
 
 
