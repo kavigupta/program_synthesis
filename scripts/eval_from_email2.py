@@ -66,7 +66,7 @@ def main(args):
             if already_executed(output_path):
                 continue
 
-            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref '
+            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
                        '--batch_size 64 '
