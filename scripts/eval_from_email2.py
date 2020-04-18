@@ -7,7 +7,7 @@ import argparse
 
 
 def valid_checkpoints():
-    for logdir in glob.glob('logdirs/**/*', recursive=True):
+    for logdir in glob.glob('logdirs/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
         numbers = []
