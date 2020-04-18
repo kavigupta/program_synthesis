@@ -37,11 +37,12 @@ def valid_modes_and_params():
             for param in params:
                 yield (mode, param, param), 'always'
         elif mode == 'real':
-            yield (mode, '', ''), 'always'
-            for limit in 1, 5, 10, 25:
-                for strategy in 'greedy', 'best_first':
-                    when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
-                    yield (mode, (strategy, limit), "{},,{}".format(strategy, limit)), when
+            for model in 'nearai', 'nearai32':
+                yield (mode, (model, ''), model), 'always'
+                for limit in 1, 5, 10, 25:
+                    for strategy in 'greedy', 'best_first':
+                        when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
+                        yield (mode, (model, (strategy, limit)), "{},,{},,{}".format(model, strategy, limit)), when
         else:
             assert False
 
@@ -77,9 +78,10 @@ def main(args):
             )
 
             if mode == 'real':
-                command += '--karel-file-ref-val ../nearai/logdirs/baseline_model/on-val.json'
-                if param != '':
-                    command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*param)
+                model_data, search_param = param
+                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                if search_param != '':
+                    command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*search_param)
             else:
                 command += '--karel-mutate-ref --karel-mutate-n-dist {dist} '.format(dist=param)
 
