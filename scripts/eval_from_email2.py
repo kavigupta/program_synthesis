@@ -70,9 +70,10 @@ def main(args):
             command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
-                       '--batch_size 64 '
+                       '--batch_size {batch_size} '
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
+                batch_size=16 if args.cpu else 64,
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
             )
