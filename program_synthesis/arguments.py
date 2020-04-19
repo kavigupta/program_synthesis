@@ -137,12 +137,12 @@ def get_arg_parser(title, mode):
                                                             'is_correct and output, incorrect examples will be used')
     infer_group.add_argument('--karel-file-ref-val', help='json file containing a list of dictionaries with keys '
                                                           'is_correct and output, incorrect examples will be used')
-    infer_group.add_argument('--karel-mutate-ref', action='store_true', default=True) # False
+    infer_group.add_argument('--karel-mutate-ref', action='store_true')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
     runtime_group = parser.add_argument_group('runtime')
     runtime_group.add_argument(
-        '--restore-map-to-cpu', action='store_true', default=True)#False
+        '--restore-map-to-cpu', action='store_true')
 
     return parser
 
