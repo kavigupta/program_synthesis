@@ -58,6 +58,10 @@ def already_executed(output_path):
 
 
 def main(args):
+    if args.batch_size is not None:
+        batch_size = args.batch_size
+    else:
+        batch_size = 16 if args.cpu else 64
     low_priority = []
     for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
         for (mode, param, render_param), when in valid_modes_and_params():
@@ -73,7 +77,7 @@ def main(args):
                        '--batch_size {batch_size} '
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
-                batch_size=16 if args.cpu else 64,
+                batch_size=batch_size,
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
             )
@@ -108,5 +112,6 @@ def main(args):
 parser = argparse.ArgumentParser()
 parser.add_argument('--num-low-priority', type=int, default=0)
 parser.add_argument('--cpu', action='store_true')
+parser.add_argument('--batch-size')
 
 main(parser.parse_args())
