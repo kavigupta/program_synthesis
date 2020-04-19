@@ -21,7 +21,7 @@ class TaskRunner:
     def __init__(self, tasks, *, max_memory, max_procs):
         self.current_processes = {}
         self.pbar = tqdm.tqdm(total=len(tasks))
-        self.tasks = tasks
+        self.tasks = tasks[::-1] # reverse to ensure we do the first task first when we run tasks.pop()
 
         self.max_memory = max_memory
         self.max_procs = max_procs
