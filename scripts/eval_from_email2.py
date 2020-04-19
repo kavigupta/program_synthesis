@@ -1,9 +1,12 @@
 import glob
 import json
 import os
+import sys
 import os.path
 import time
 import argparse
+
+from collections import Counter
 
 
 def valid_checkpoints():
@@ -62,7 +65,7 @@ def main(args):
         batch_size = args.batch_size
     else:
         batch_size = 16 if args.cpu else 64
-    low_priority = []
+    by_priority = []
     for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
         for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
@@ -99,19 +102,32 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
-#                 import sys
-#                 print(index_last, num_checkpoints, file=sys.stderr)
-                print(command)
+            if index_last == 0:
+                priority = 11
+            elif num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
+                priority = 21
             else:
-                low_priority.append(command)
-    for command in low_priority[:args.num_low_priority]:
+                priority = 100
+            if when == 'always':
+                priority -= 1
+            by_priority.append((priority, command))
+    by_priority.sort()
+    print("commands by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    assert args.max_commands is None or args.priority is None, "cannot specify both a maximal number of commands and a maximal priority"
+    if args.max_commands is not None:
+        by_priority = by_priority[:args.max_commands]
+    elif args.priority is not None:
+        by_priority = [(x, y) for x, y in by_priority if x <= args.priority]
+    print("commands to use by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+
+    for _, command in by_priority:
         print(command)
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--num-low-priority', type=int, default=0)
+parser.add_argument('--max-commands', type=int, default=None)
 parser.add_argument('--cpu', action='store_true')
 parser.add_argument('--batch-size')
+parser.add_argument('--priority', type=int, default=None)
 
 main(parser.parse_args())
