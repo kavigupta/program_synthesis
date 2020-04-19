@@ -16,8 +16,8 @@ def valid_checkpoints():
                 time_delta = time.time() - os.path.getmtime(ckpt)
             except FileNotFoundError:
                 continue
-            if time_delta < 5 * 60:
-                # ignore really recent checkpoints (last 5 minutes)
+            if time_delta < 10 * 60:
+                # ignore really recent checkpoints (last 10 minutes)
                 # these are deleted by the time an evaluation can be run :(
                 continue
             ckpt_number = int(ckpt[-8:])
