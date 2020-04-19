@@ -25,10 +25,9 @@ def get_arg_parser(title, mode):
 
 
     parser.add_argument(
-        '--pretrained', type=str, default='entire-model::/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000', 
-        help='Use format "entire-model:logdirs/path"')
+        '--pretrained', type=str, help='Use format "entire-model:logdirs/path"')
     parser.add_argument(
-        '--pretrained-step', type=int, default=1769300)
+        '--pretrained-step', type=int)
 
     if mode == 'train':
         train_group = parser.add_argument_group('train')
