@@ -1,4 +1,3 @@
-
 import GPUtil
 from time import sleep
 import subprocess
@@ -6,10 +5,12 @@ import tqdm
 import tempfile
 import os
 
+
 def every(seconds):
     while True:
         sleep(seconds)
         yield
+
 
 def run_on_gpu(gpu, task):
     command = "CUDA_VISIBLE_DEVICES={} {}".format(gpu, task)
@@ -17,11 +18,12 @@ def run_on_gpu(gpu, task):
     proc = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=file, shell=os.environ['SHELL'])
     return command, task, file, proc
 
+
 class TaskRunner:
     def __init__(self, tasks, *, max_memory, max_procs, command_line_replenish):
         self.current_processes = {}
         self.pbar = tqdm.tqdm(total=len(tasks))
-        self.tasks = tasks[::-1] # reverse to ensure we do the first task first when we run tasks.pop()
+        self.tasks = tasks[::-1]  # reverse to ensure we do the first task first when we run tasks.pop()
 
         self.max_memory = max_memory
         self.max_procs = max_procs
@@ -85,16 +87,20 @@ class TaskRunner:
             self.tasks = new_tasks + self.tasks
             self.pbar.total += len(new_tasks)
 
+
 def run_tasks(tasks, **kwargs):
     TaskRunner(tasks, **kwargs).run_all()
+
 
 if __name__ == '__main__':
     import argparse
     from sys import stdin
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-memory", type=float, default=1.0)
     parser.add_argument("--max-procs", type=int, default=float('inf'))
     parser.add_argument("--command-line-replenish", type=str)
     args = parser.parse_args()
 
-    run_tasks(list(stdin), max_memory=args.max_memory, max_procs=args.max_procs, command_line_replenish=args.command_line_replenish)
+    run_tasks(list(stdin), max_memory=args.max_memory, max_procs=args.max_procs,
+              command_line_replenish=args.command_line_replenish)
