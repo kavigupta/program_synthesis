@@ -20,7 +20,7 @@ def run_on_gpu(gpu, task):
 
 
 class TaskRunner:
-    def __init__(self, tasks, *, max_memory, max_procs, command_line_replenish):
+    def __init__(self, tasks, *, max_memory, max_procs, command_line_replenish, errors_file):
         self.current_processes = {}
         self.pbar = tqdm.tqdm(total=len(tasks))
         self.tasks = tasks[::-1]  # reverse to ensure we do the first task first when we run tasks.pop()
@@ -28,6 +28,7 @@ class TaskRunner:
         self.max_memory = max_memory
         self.max_procs = max_procs
         self.command_line_replenish = command_line_replenish
+        self.errors_file = errors_file
 
     def handle_done(self):
         for gpu, (name, task, file, proc) in list(self.current_processes.items()):
@@ -37,6 +38,8 @@ class TaskRunner:
                     print("Process failed: ", name)
                     file.seek(0)
                     print(file.read().decode('utf-8'))
+                    with open(self.errors_file, "a") as f:
+                        f.write(task + "\n")
                 del self.current_processes[gpu]
                 self.pbar.update()
 
@@ -82,8 +85,11 @@ class TaskRunner:
             proc.wait()
             tmp.seek(0)
             new_tasks = [x.strip() for x in tmp.read().decode('utf-8').split("\n")[::-1] if x.strip()]
-            current_command_lines = {task for _, task, _, _ in self.current_processes.values()} | set(self.tasks)
-            new_tasks = [x for x in new_tasks if x not in current_command_lines]
+            with open(self.errors_file) as f:
+                errors = list(f)
+            current_command_lines = {task for _, task, _, _ in self.current_processes.values()}
+            excluded = current_command_lines | set(self.tasks) | set(errors)
+            new_tasks = [x for x in new_tasks if x not in excluded]
             self.tasks = new_tasks + self.tasks
             self.pbar.total += len(new_tasks)
 
@@ -100,7 +106,8 @@ if __name__ == '__main__':
     parser.add_argument("--max-memory", type=float, default=1.0)
     parser.add_argument("--max-procs", type=int, default=float('inf'))
     parser.add_argument("--command-line-replenish", type=str)
+    parser.add_argument("--errors-file", type=str, file=os.path.expanduser('~/temp/errors.txt'))
     args = parser.parse_args()
 
     run_tasks(list(stdin), max_memory=args.max_memory, max_procs=args.max_procs,
-              command_line_replenish=args.command_line_replenish)
+              command_line_replenish=args.command_line_replenish, errors_file=args.errors_file)
