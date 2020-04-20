@@ -106,7 +106,7 @@ if __name__ == '__main__':
     parser.add_argument("--max-memory", type=float, default=1.0)
     parser.add_argument("--max-procs", type=int, default=float('inf'))
     parser.add_argument("--command-line-replenish", type=str)
-    parser.add_argument("--errors-file", type=str, file=os.path.expanduser('~/temp/errors.txt'))
+    parser.add_argument("--errors-file", type=str, default=os.path.expanduser('~/temp/errors.txt'))
     args = parser.parse_args()
 
     run_tasks(list(stdin), max_memory=args.max_memory, max_procs=args.max_procs,
