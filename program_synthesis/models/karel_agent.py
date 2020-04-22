@@ -246,7 +246,6 @@ class KarelEditEnv(object):
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
-        #print(orig_examples)
         for idx, or_ex in enumerate(orig_examples):
             or_ex.ref_example.code_sequence = tuple([self.vocab.itos(ns) for ns in new_states[idx][0]])
             or_ex.ref_example.text = tuple([self.vocab.itos(ns) for ns in new_states[idx][0]])
@@ -290,10 +289,8 @@ class KarelEditEnv(object):
 
     def step(self, action):
 
-        (labels, probs, code_seq, values, lengths) = action
-
-        acc = np.array([lengths.mean()])
-        reward = lengths
+        (labels, probs, code_seq, values, reward) = action
+        acc = np.array([0])
 
         # Similarly the next states should also be modified in this fasion
         next_state = labels  #self.edit_space_to_code_space_special_order(actions, code_seq, lengths[0], lengths[1])
@@ -308,6 +305,7 @@ class KarelEditPolicy(nn.Module):
 
         set_vocab(args)
         self.model = get_model(args)
+        self.criterion = nn.CrossEntropyLoss(ignore_index=-1)
 
     def encode(self, input_grid, output_grid):
         return self.model.model.encoder(input_grid,output_grid)
@@ -340,17 +338,29 @@ class KarelEditPolicy(nn.Module):
             volatile=False,
             differentiable=True
         )
+
         output_code = self.model.model.decoder.postprocess_output([[x.sequence for x in y] for y in sequences], memory)
         all_logits = []
         rewards = []
         for logit_beam, code_beam, example in zip(sequences, output_code, orig_examples):
             for i, (logits, code) in enumerate(zip(logit_beam, code_beam)):
                 code = list(map(self.model.vocab.itos, code))
-                res = executor.evaluate_code(code, example.schema.args, example.input_tests, self.model.executor.execute)
                 all_logits.append(torch.sum(torch.cat([x.view(1) for x in logits.log_probs_torch])))
-                rewards.append(res['correct'] / res['total'])
+                run_cases = lambda tests: executor.evaluate_code(code, example.schema.args, tests,
+                                                                 self.model.executor.execute)
+                input_tests = run_cases(example.input_tests)
+                reward = input_tests['correct'] / input_tests['total']
+                if self.args.use_held_out_test_for_rl:
+                    held_out_test = run_cases(example.tests)
+                    reward += held_out_test['correct']  # worth as much as all the other ones combined
+                if reward == 2:
+                    reward = 1
+                else:
+                    reward = 0
+                rewards.append(reward)
         all_logits = torch.cat([x.view(1) for x in all_logits])
         rewards = torch.tensor(rewards)
+
         if all_logits.is_cuda:
             rewards = rewards.cuda()
         return rewards, all_logits, output_code
@@ -376,6 +386,13 @@ class KarelEditPolicy(nn.Module):
         ref_code_memory = self.encode_code(ref_code, input_grids, output_grids, ref_trace_grids, ref_trace_events)
 
         ref_trace_memory = self.encode_trace( ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave)
+
+        # calculate nll loss
+        #logits, labels = self.model.model.decoder(io_embed, ref_code_memory, ref_trace_memory, code_seqs, dec_data)
+
+        #print('crossentro')
+        #print(self.criterion(
+        #    logits.view(-1, logits.shape[-1]), labels.contiguous().view(-1)))
 
         # Calculate logits and reward using beam search
 
@@ -407,12 +424,12 @@ class KarelAgent(object):
         # probs: probability we assign each possible operation in sequence
         # orig_code: the code we try to recover
         # dec_output: output of decoder lstm + list of sequence sizes
-        labels, probs, orig_code, values, lengths = self.best_action_value(state, return_true_code)
+        labels, probs, orig_code, values, reward = self.best_action_value(state, return_true_code)
 
-        return (labels, probs, orig_code, values, lengths)
+        return (labels, probs, orig_code, values, reward)
 
     def best_action_value(self, states, return_true_code):
-        logits, labels, dec_output, lengths = self.model.action_value(states)
+        logits, labels, dec_output, reward = self.model.action_value(states)
         # Yield states[-1] for orig code containing item.ref_example.code_sequence
         
         probs = torch.exp(logits)
@@ -420,9 +437,9 @@ class KarelAgent(object):
         values = self.critic(dec_output)
         # Change to [2] for original code and [-1] for modified code
         if return_true_code:
-            return labels, probs, states[-1], values, lengths
+            return labels, probs, states[-1], values, reward
         else:
-            return labels, probs, [], values, lengths
+            return labels, probs, [], values, reward
 
 class ReplayBuffer(object):
 
@@ -597,6 +614,8 @@ class PolicyTrainer(object):
     
     def compute_total_loss(self, value_loss, action_loss, dist_entropy):
         self.actor_critic.optimizer.zero_grad()
+        print('ppoloss')
+        print((value_loss * self.args.value_loss_coef + action_loss - dist_entropy * self.args.entropy_coef))
         (value_loss * self.args.value_loss_coef + action_loss - dist_entropy * self.args.entropy_coef).backward()
         nn.utils.clip_grad_norm_(self.actor_critic.model.model.model.parameters(),
                                         self.args.max_grad_norm)
@@ -647,8 +666,7 @@ class PolicyTrainer(object):
 
 
     def Program_PPO_update(self, batch):
-        if self.broke:
-            return 0
+
         # store data
         n= len(batch[0][2])
         mask = self.mask_batch(n)
@@ -661,15 +679,6 @@ class PolicyTrainer(object):
 
             prob_a, reward, new_state, value_preds_batch, lengths, acc = batch[i][1:]
             
-            #get_action_log_probs, actions = self.get_action_log_probs(old_action_log_probs_batch)
-
-            #reward = torch.cuda.FloatTensor(reward) if self.args.cuda else torch.FloatTensor(reward)
-
-            #reward = self.special_order_to_batch(reward, lengths[0], lengths[1], 'mean')
-
-            #prob_a = self.special_order_to_batch(get_action_log_probs.view(-1), lengths[0], lengths[1], 'sum')
-
-            #prob_a, _, reward_ = self.prepare_ppo_batch(lengths, get_action_log_probs, get_action_log_probs.view(-1), reward)
             pi_old[i] = prob_a
             reward_s[i] = reward
 
@@ -693,26 +702,14 @@ class PolicyTrainer(object):
             for idx, b in enumerate(batch):
                 labels, probs, _, value, _ = self.actor_critic.select_action(b[0],return_true_code=False)
 
-                #extra = torch.ones(probs.shape[1]).cuda() if self.args.cuda else torch.ones(probs.shape[1])
-                #extra = extra*1e-12
-
-                #probs = probs + extra
-
                 values[idx]=value.view(-1)
 
-                # (*) Contnue here to sort probs !!!
-                # get log probs and entropy
                 action_log_probs = torch.log(probs)
 
                 m = torch.distributions.Categorical(probs)
 
                 dist_entropy[idx] = m.entropy().mean()
 
-                #action_log_probs = torch.gather(action_log_probs, dim=1, index=torch.argmax(probs,dim=1).view(-1,1))
-
-                #pi_new = self.special_order_to_batch(action_log_probs.view(-1), _[0], _[1], 'sum')
-                
-                #pi_new = self.action_batch(action_log_probs, _)
                 pi_a[idx] = action_log_probs
 
             dist_entropy = dist_entropy.mean()
@@ -757,32 +754,6 @@ class PolicyTrainer(object):
             action_loss_epoch += action_loss.item()
             dist_entropy_epoch += dist_entropy.item()
 
-        if (np.isnan(np.array(action_loss_epoch)) or np.isnan(np.array(value_loss_epoch))):
-            if self.broke:
-                return 0
-            with open(self.args.model_dir + "value_preds_batch__origs.pkl", "wb") as fout:
-                pkl.dump(value_preds_batch__origs, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-            with open(self.args.model_dir + "pi_old.pkl", "wb") as fout:
-                pkl.dump(pi_old, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-            with open(self.args.model_dir + "pi_a.pkl", "wb") as fout:
-                pkl.dump(pi_a, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-            with open(self.args.model_dir + "values.pkl", "wb") as fout:
-                pkl.dump(values, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-            with open(self.args.model_dir + "td_target.pkl", "wb") as fout:
-                pkl.dump(td_target, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-            with open(self.args.model_dir + "batch.pkl", "wb") as fout:
-                pkl.dump(batch, fout, protocol=pkl.HIGHEST_PROTOCOL)
-            fout.close()
-
-
-            self.broke = True
-            return 0
-
         value_loss_epoch /= self.args.ppo_steps
         action_loss_epoch /= self.args.ppo_steps
         dist_entropy_epoch /= self.args.ppo_steps
@@ -793,8 +764,10 @@ class PolicyTrainer(object):
         return (action_loss_epoch, value_loss_epoch, dist_entropy_epoch, reward_epoch)
     
     def train(self):
-        if self.args.load_sl_model:
-            self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',True, int(1769300)) #self.args.cuda
+        #if self.args.load_sl_model:
+            #self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',True, int(1769300)) #self.args.cuda
+        #    self.load_pretrained('/zhome/3f/6/108837/program_synthesis/program_synthesis/models/1587190775lr001_dcs10000_sgd_roll3/',True, int(20000000)) #self.args.cuda
+
         writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
         #replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
         errors = 0
@@ -813,34 +786,34 @@ class PolicyTrainer(object):
                 cum_reward += loss[3]
                 print_stats(epoch, i, loss, errors,cum_reward)
                 
-                writer.add(runner,'training/action_loss', loss[0])
-                writer.add(runner,'training/value_loss', loss[1])
-                writer.add(runner,'training/entropy', loss[2])
-                writer.add(runner,'training/reward', loss[3])
-                writer.add(runner,'training/cummulative_reward', cum_reward)
+                #writer.add(runner,'training/action_loss', loss[0])
+                #writer.add(runner,'training/value_loss', loss[1])
+                #writer.add(runner,'training/entropy', loss[2])
+                #writer.add(runner,'training/reward', loss[3])
+                #writer.add(runner,'training/cummulative_reward', cum_reward)
 
                 # Exact eval
-                if i % self.args.eval_every_n == 0:
-                    self.actor_critic.model.eval()
-                    stats = {'correct': 0, 'total': 0}
-                    for dev_idx, dev_batch in enumerate(self.env.devset_loader):
-                        batch_res = self.actor_critic.model.model.eval(dev_batch)
-                        stats['correct'] += batch_res['correct']
-                        stats['total'] += batch_res['total']
-                        if dev_idx > self.args.eval_n_steps:
-                            break
-                    accuracy = float(stats['correct']) / stats['total']
-                    print("Dev accuracy: %.5f" % accuracy)
-                    self.actor_critic.model.train()
-                writer.add(runner,'eval/acc', accuracy)
+                #if i % self.args.eval_every_n == 0:
+                #    self.actor_critic.model.eval()
+                #    stats = {'correct': 0, 'total': 0}
+                #    for dev_idx, dev_batch in enumerate(self.env.devset_loader):
+                #        batch_res = self.actor_critic.model.model.eval(dev_batch)
+                #        stats['correct'] += batch_res['correct']
+                #        stats['total'] += batch_res['total']
+                #        if dev_idx > self.args.eval_n_steps:
+                #            break
+                #    accuracy = float(stats['correct']) / stats['total']
+                #    print("Dev accuracy: %.5f" % accuracy)
+                #    self.actor_critic.model.train()
+                #writer.add(runner,'eval/acc', accuracy)
 
                 #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):
             #    batch = replay_buffer.sample(1)
 
-                if i % self.args.eval_every_n == 0:
-                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, epoch, self.args.model_dir+self.args.model_nickname)
+                #if i % self.args.eval_every_n == 0:
+                #    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int(epoch*(len(self.env.dataset_loader))+i), self.args.model_dir+self.args.model_nickname)
 
 
 
@@ -851,6 +824,7 @@ def main():
 
     args = parser.parse_args()
     args.cuda = not args.no_cuda and torch.cuda.is_available()
+    saver.save_args(args)
 
     # Set seed to redo nan error
     #set_seed(13)
