@@ -59,6 +59,10 @@ KarelEvent = collections.namedtuple('KarelEvent', [
     'success', # False if action failed or loop will repeat forever
 ])
 
+ACTIONS = {x.lower() for x in ('move', 'turnRight', 'turnLeft', 'pickMarker', 'putMarker')}
+REPEATS = {'repeat'}
+BRANCHES = {x.lower() for x in ('ifElse', 'while', 'if')}
+
 
 class KarelExecutor(object):
 
@@ -190,6 +194,38 @@ class KarelExecutor(object):
                 return ExecutionResult(None, trace)
 
         return ExecutionResult(np.where(field.ravel())[0].tolist(), trace)
+
+    def gather_coverage(self, datum, result):
+        try:
+            program_length = len(result['output'])
+            coverage = [dict(action=[0] * program_length, repeat=[0] * program_length, branch=[[0, 0]] * program_length)
+                        for _ in range(len(datum.input_tests))]
+
+            for test_idx, test in enumerate(datum.input_tests):
+                events = self.execute(result['output'], None, test['input'], record_trace=True).trace.events
+                for event in events:
+                    start, end = event.span
+                    if event.type.lower() in ACTIONS:
+                        assert start == end
+                        coverage[test_idx]['action'][start] = 1
+                    elif event.type.lower() in REPEATS:
+                        coverage[test_idx]['repeat'][start] = 1
+                    elif event.type.lower() in BRANCHES:
+                        coverage[test_idx]['branch'][start][event.cond_value] = 1
+                    else:
+                        raise RuntimeError("unrecognized", event)
+
+            return dict(
+                classification=dict(
+                    action=[token.lower() in ACTIONS for token in result['output']],
+                    repeat=[token.lower() in REPEATS for token in result['output']],
+                    branch=[token.lower() in BRANCHES for token in result['output']]
+                ),
+                coverage=coverage
+            )
+
+        except ExecutorSyntaxException:
+            return None
 
 
 def get_executor(args):

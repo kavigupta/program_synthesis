@@ -1,13 +1,16 @@
 import glob
 import json
 import os
+import sys
 import os.path
 import time
 import argparse
 
+from collections import Counter
+
 
 def valid_checkpoints():
-    for logdir in glob.glob('logdirs/**/*', recursive=True):
+    for logdir in glob.glob('logdirs/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
         numbers = []
@@ -16,8 +19,8 @@ def valid_checkpoints():
                 time_delta = time.time() - os.path.getmtime(ckpt)
             except FileNotFoundError:
                 continue
-            if time_delta < 5 * 60:
-                # ignore really recent checkpoints (last 5 minutes)
+            if time_delta < 10 * 60:
+                # ignore really recent checkpoints (last 10 minutes)
                 # these are deleted by the time an evaluation can be run :(
                 continue
             ckpt_number = int(ckpt[-8:])
@@ -27,7 +30,7 @@ def valid_checkpoints():
             numbers.append(ckpt_number)
         numbers.sort(reverse=True)
         for idx, ckpt_number in enumerate(numbers):
-            yield (logdir, ckpt_number), idx
+            yield (logdir, ckpt_number), (idx, len(numbers))
 
 
 def valid_modes_and_params():
@@ -37,11 +40,12 @@ def valid_modes_and_params():
             for param in params:
                 yield (mode, param, param), 'always'
         elif mode == 'real':
-            yield (mode, '', ''), 'always'
-            for limit in 1, 5, 10, 25:
-                for strategy in 'greedy', 'best_first':
-                    when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
-                    yield (mode, (strategy, limit), "{},,{}".format(strategy, limit)), when
+            for model in 'nearai', 'nearai32':
+                yield (mode, (model, ''), model), 'always'
+                for limit in 1, 5, 10, 25:
+                    for strategy in 'greedy', 'best_first':
+                        when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
+                        yield (mode, (model, (strategy, limit)), "{},,{},,{}".format(model, strategy, limit)), when
         else:
             assert False
 
@@ -57,8 +61,12 @@ def already_executed(output_path):
 
 
 def main(args):
-    low_priority = []
-    for (logdir, ckpt_number), index_last in valid_checkpoints():
+    if args.batch_size is not None:
+        batch_size = args.batch_size
+    else:
+        batch_size = 16 if args.cpu else 64
+    by_priority = []
+    for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
         for (mode, param, render_param), when in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
@@ -66,20 +74,22 @@ def main(args):
             if already_executed(output_path):
                 continue
 
-            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref '
+            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
-                       '--batch_size 64 '
+                       '--batch_size {batch_size} '
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
+                batch_size=batch_size,
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
             )
 
             if mode == 'real':
-                command += '--karel-file-ref-val ../nearai/logdirs/baseline_model/on-val.json'
-                if param != '':
-                    command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*param)
+                model_data, search_param = param
+                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                if search_param != '':
+                    command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*search_param)
             else:
                 command += '--karel-mutate-ref --karel-mutate-n-dist {dist} '.format(dist=param)
 
@@ -92,16 +102,32 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if when != 'always' and index_last != 0:
-                low_priority.append(command)
+            if index_last == 0:
+                priority = 11
+            elif num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
+                priority = 21
             else:
-                print(command)
-    for command in low_priority[:args.num_low_priority]:
+                priority = 100
+            if when == 'always':
+                priority -= 1
+            by_priority.append((priority, command))
+    by_priority.sort()
+    print("commands by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    assert args.max_commands is None or args.priority is None, "cannot specify both a maximal number of commands and a maximal priority"
+    if args.max_commands is not None:
+        by_priority = by_priority[:args.max_commands]
+    elif args.priority is not None:
+        by_priority = [(x, y) for x, y in by_priority if x <= args.priority]
+    print("commands to use by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+
+    for _, command in by_priority:
         print(command)
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--num-low-priority', type=int, default=0)
+parser.add_argument('--max-commands', type=int, default=None)
 parser.add_argument('--cpu', action='store_true')
+parser.add_argument('--batch-size')
+parser.add_argument('--priority', type=int, default=None)
 
 main(parser.parse_args())
