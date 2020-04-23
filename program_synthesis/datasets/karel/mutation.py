@@ -339,17 +339,17 @@ class KarelOutputRefExampleMutator(object):
             potentially overfit programs.
 
         Arguments:
-            to_be_used: a list of booleans, each of which represents whether the given item should be used.
+            to_be_used_indices: a list of indices of the code examples to be used
 
-            ref_code: a list of tuples, each of which represents a program to be used. This must satisfy the
-                invariant len(ref_code) == sum(to_be_used), and the ref_code[k] corresponds to the index
-                in the original dataset of the kth 1 in to_be_used
+            ref_code: a list of tuples, each of which represents a program to be used.
+                Each of these examples must correspond to the equivalent index in
+                to_be_used_indices
 
             add_trace: whether to add the execution trace when modifying a program
         """
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
-        self.to_be_used = to_be_used
+        self.to_be_used_indices = to_be_used_indices
         self.ref_code = ref_code
 
     @staticmethod
@@ -388,14 +388,14 @@ class KarelOutputRefExampleMutator(object):
             'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x)
         }[mode]
 
-        to_be_used = [can_be_used(x) for x in examples]
+        to_be_used_idx = [i for i, x in enumerate(examples) if can_be_used(x)]
         if mode == 'overfit-check':
-            to_be_used = equal_halves(to_be_used, lambda x: x['is_correct'])
-        negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
-        return KarelOutputRefExampleMutator(to_be_used, negative_examples, add_trace)
+            to_be_used_idx = equal_halves(to_be_used_idx, lambda x: x['is_correct'])
+        negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
+        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, add_trace)
 
     def filter_index(self, index):
-        return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
+        return [index[i] for i in self.to_be_used_indices]
 
     def __call__(self, idx, karel_example):
         assert self.ref_code[idx]
