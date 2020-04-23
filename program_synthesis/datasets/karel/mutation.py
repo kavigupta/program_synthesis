@@ -390,7 +390,7 @@ class KarelOutputRefExampleMutator(object):
 
         to_be_used_idx = [i for i, x in enumerate(examples) if can_be_used(x)]
         if mode == 'overfit-check':
-            to_be_used_idx = equal_halves(to_be_used_idx, lambda x: x['is_correct'])
+            to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
         return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, add_trace)
 
