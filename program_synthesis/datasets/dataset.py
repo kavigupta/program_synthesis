@@ -106,13 +106,14 @@ class KarelExample(object):
         'input_tests',
         'tests',
         'text',
-        'ref_example', )
+        'ref_example',
+        'code_is_correct', )
     schema = Schema(None, None)
     code_tree = []
     _empty_trace = executor.KarelTrace([], [])
 
     def __init__(self, idx, guid, code_sequence, input_tests, tests,
-            ref_example=None):
+            ref_example=None, code_is_correct=None):
         self.idx = idx
         self.guid = guid
         self.code_sequence = code_sequence
@@ -120,6 +121,7 @@ class KarelExample(object):
         self.tests = tests
         self.text = code_sequence
         self.ref_example = ref_example
+        self.code_is_correct = code_is_correct
 
     @classmethod
     def from_dict(cls, d):
@@ -140,8 +142,9 @@ class KarelExample(object):
             ref_example = KarelExample.from_dict(ref_dict)
         else:
             ref_example = None
+        code_is_correct = d.get('code_is_correct')
         return cls(d.get('id', None), d['guid'], d['code'], all_examples[:5], all_examples[5:],
-                ref_example)
+                 ref_example, code_is_correct)
 
     def to_dict(self):
         return {
@@ -153,7 +156,8 @@ class KarelExample(object):
                 'trace_grids': example.get('trace', self._empty_trace).grids,
             } for example in self.input_tests + self.tests],
             'code': self.code_sequence,
-            'ref': self.ref_example.to_dict() if self.ref_example else None
+            'ref': self.ref_example.to_dict() if self.ref_example else None,
+            'code_is_correct' : self.code_is_correct
         }
 
 
