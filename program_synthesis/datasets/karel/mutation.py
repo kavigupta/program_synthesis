@@ -331,24 +331,26 @@ class KarelExampleMutator(object):
 
 
 class KarelOutputRefExampleMutator(object):
-    def __init__(self, to_be_used, incorrect_code, add_trace):
+    def __init__(self, to_be_used, ref_code, add_trace):
         """
-        Represents a list of incorrect examples, one per correct code example
+        Represents a list of reference outputs, one per example in the training data.
+
+        This is used to represent incorrect programs, but it can also be used to represent
+            potentially overfit programs.
 
         Arguments:
             to_be_used: a list of booleans, each of which represents whether the given item should be used.
-                The purpose of this is to be able to filter out items that represent correct programs, which
-                are not to be used
 
-            incorrect_code: a list of tuples, each of which represents an incorrect program. This must satisfy the
-                invariant len(incorrect_code) == sum(to_be_used)
+            ref_code: a list of tuples, each of which represents a program to be used. This must satisfy the
+                invariant len(ref_code) == sum(to_be_used), and the ref_code[k] corresponds to the index
+                in the original dataset of the kth 1 in to_be_used
 
             add_trace: whether to add the execution trace when modifying a program
         """
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
         self.to_be_used = to_be_used
-        self.incorrect_code = incorrect_code
+        self.ref_code = ref_code
 
     @staticmethod
     def from_path(karel_ref_file_train, add_trace):
@@ -377,8 +379,8 @@ class KarelOutputRefExampleMutator(object):
         return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
 
     def __call__(self, idx, karel_example):
-        assert self.incorrect_code[idx]
-        result = add_incorrect_code(karel_example, self.incorrect_code[idx], self.add_trace, self.executor)
+        assert self.ref_code[idx]
+        result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor)
         assert result.ref_example.code_sequence
         return result
 
