@@ -283,7 +283,7 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
-def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True):
+def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True, code_is_correct=None):
     from ..dataset import KarelExample
     if check_ref_example:
         assert karel_example.ref_example is None
@@ -301,7 +301,8 @@ def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_e
         guid=None,
         code_sequence=new_code,
         input_tests=new_tests,
-        tests=karel_example.tests)
+        tests=karel_example.tests,
+        code_is_correct=code_is_correct)
     return karel_example
 
 
@@ -331,7 +332,7 @@ class KarelExampleMutator(object):
 
 
 class KarelOutputRefExampleMutator(object):
-    def __init__(self, to_be_used, ref_code, add_trace):
+    def __init__(self, to_be_used_indices, ref_code, code_is_correct, add_trace):
         """
         Represents a list of reference outputs, one per example in the training data.
 
@@ -350,6 +351,7 @@ class KarelOutputRefExampleMutator(object):
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
         self.to_be_used_indices = to_be_used_indices
+        self.code_is_correct = code_is_correct
         self.ref_code = ref_code
 
     @staticmethod
@@ -392,14 +394,16 @@ class KarelOutputRefExampleMutator(object):
         if mode == 'overfit-check':
             to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
-        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, add_trace)
+        code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
+        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, code_is_correct, add_trace)
 
     def filter_index(self, index):
         return [index[i] for i in self.to_be_used_indices]
 
     def __call__(self, idx, karel_example):
         assert self.ref_code[idx]
-        result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor)
+        result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor,
+                                    code_is_correct=self.code_is_correct[idx])
         assert result.ref_example.code_sequence
         return result
 
