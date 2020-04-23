@@ -330,7 +330,7 @@ class KarelExampleMutator(object):
         return new_code
 
 
-class KarelIncorrectExampleMutator(object):
+class KarelOutputRefExampleMutator(object):
     def __init__(self, to_be_used, incorrect_code, add_trace):
         """
         Represents a list of incorrect examples, one per correct code example
@@ -371,7 +371,7 @@ class KarelIncorrectExampleMutator(object):
 
         to_be_used = [can_be_used(x) for x in examples]
         negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
-        return KarelIncorrectExampleMutator(to_be_used, negative_examples, add_trace)
+        return KarelOutputRefExampleMutator(to_be_used, negative_examples, add_trace)
 
     def filter_index(self, index):
         return [idx for i, idx in enumerate(index) if self.to_be_used[i]]

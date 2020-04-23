@@ -15,7 +15,7 @@ import torch.utils.data
 import data
 from . import executor
 from . import stats
-from .karel.mutation import KarelExampleMutator, KarelIncorrectExampleMutator
+from .karel.mutation import KarelExampleMutator, KarelOutputRefExampleMutator
 
 
 Schema = collections.namedtuple("Schema", ["args", "return_type"])
@@ -498,7 +498,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_train, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
@@ -507,7 +507,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2,
@@ -576,7 +576,7 @@ def get_karel_eval_dataset(args, model):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2)
