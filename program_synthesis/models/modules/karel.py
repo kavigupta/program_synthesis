@@ -1726,28 +1726,36 @@ class LGRLKarel(nn.Module):
     def decode_token(self, token, state, memory, attentions=None):
         return self.decoder.decode_token(token, state, memory, attentions)
 
+def get_trace_encoder(args):
+    if args.karel_trace_enc.startswith('conv3d'):
+        trace_encoder = TimeConvTraceEncoder(args)
+    elif args.karel_trace_enc.startswith('lstm'):
+        trace_encoder = RecurrentTraceEncoder(args)
+    elif args.karel_trace_enc == 'none' or args.karel_trace_enc.startswith('aggregate'):
+        trace_encoder = lambda *args: None
+    else:
+        raise ValueError(args.karel_trace_enc)
+    return trace_encoder
+
+def get_code_encoder(args, vocab_size):
+        # code_encoder = CodeEncoderRL
+        if args.karel_code_enc == 'default':
+            code_encoder = CodeEncoder(vocab_size, args)
+        elif args.karel_code_enc == 'none':
+            code_encoder = lambda *args: None
+        else:
+            raise ValueError(args.karel_code_enc)
+        return code_encoder
+
 
 class LGRLRefineKarel(nn.Module):
     def __init__(self, vocab_size, args):
         super(LGRLRefineKarel, self).__init__()
         self.args = args
 
-        if self.args.karel_trace_enc.startswith('conv3d'):
-            self.trace_encoder = TimeConvTraceEncoder(self.args)
-        elif self.args.karel_trace_enc.startswith('lstm'):
-            self.trace_encoder = RecurrentTraceEncoder(self.args)
-        elif self.args.karel_trace_enc == 'none' or self.args.karel_trace_enc.startswith('aggregate'):
-            self.trace_encoder = lambda *args: None
-        else:
-            raise ValueError(self.args.karel_trace_enc)
+        self.trace_encoder = get_trace_encoder(args)
 
-        # code_encoder = CodeEncoderRL
-        if self.args.karel_code_enc == 'default':
-            self.code_encoder = CodeEncoder(vocab_size, args)
-        elif self.args.karel_code_enc == 'none':
-            self.code_encoder = lambda *args: None
-        else:
-            raise ValueError(self.args.karel_code_enc)
+        self.code_encoder = get_code_encoder(args, vocab_size)
 
         if self.args.karel_refine_dec == 'default':
             self.decoder = LGRLSeqRefineDecoder(vocab_size, args)
