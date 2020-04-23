@@ -353,7 +353,18 @@ class KarelOutputRefExampleMutator(object):
         self.ref_code = ref_code
 
     @staticmethod
-    def from_path(karel_ref_file_train, add_trace):
+    def from_path(karel_ref_file_train, add_trace, mode='debugger'):
+        """
+        Get a mutator from the given file.
+
+        Arguments:
+            karel_ref_file_train: the file to get the data from
+            add_trace: whether or not to add the traces
+            mode: which mode to load the data in.
+                If 'debugger', load all examples which do not pass all 5 test cases
+                If 'overfit-check', load all examples which pass 5 test cases, and
+                    ensure an equal number pass the held out test or not.
+        """
         if karel_ref_file_train is None:
             return None
 
@@ -362,16 +373,24 @@ class KarelOutputRefExampleMutator(object):
 
         parser = KarelForSynthesisParser()
 
-        def can_be_used(x):
-            if x['passes_given_tests']:
-                return False
+        def is_valid_syntax(x):
             try:
                 parser.parse(tuple(x['output']), debug=False)
             except KarelSyntaxError:
                 return False
             return True
 
+        def passes_given_tests(x):
+            return x['passes_given_tests']
+
+        can_be_used = {
+            'debugger': lambda x: not passes_given_tests(x) and is_valid_syntax(x),
+            'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x)
+        }[mode]
+
         to_be_used = [can_be_used(x) for x in examples]
+        if mode == 'overfit-check':
+            to_be_used = equal_halves(to_be_used, lambda x: x['is_correct'])
         negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
         return KarelOutputRefExampleMutator(to_be_used, negative_examples, add_trace)
 
@@ -383,6 +402,26 @@ class KarelOutputRefExampleMutator(object):
         result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor)
         assert result.ref_example.code_sequence
         return result
+
+
+def equal_halves(items, predicate, seed=0):
+    rng = np.random.RandomState(seed)
+    pos_idx = []
+    neg_idx = []
+    for i, item in enumerate(items):
+        if predicate(item):
+            pos_idx.append(i)
+        else:
+            neg_idx.append(i)
+    if len(pos_idx) < len(neg_idx):
+        rng.shuffle(neg_idx)
+        neg_idx = neg_idx[:len(pos_idx)]
+    else:
+        rng.shuffle(pos_idx)
+        pos_idx = pos_idx[:len(neg_idx)]
+    all_idx = sorted(pos_idx + neg_idx)
+    return [items[i] for i in all_idx]
+
 
 # Definition of Action Parameters
 
