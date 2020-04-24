@@ -488,6 +488,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided "
 
     add_trace = args.karel_trace_enc != 'none'
+    mode = ('overfit-check' if args.model_type == 'karel-lgrl-classifier' else 'debugger')
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -502,7 +503,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace, mode)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
@@ -511,7 +512,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2,
@@ -568,6 +569,7 @@ def get_karel_eval_dataset(args, model):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided but were {} and {}".format(args.karel_mutate_ref, file_ref)
 
     add_trace = args.karel_trace_enc != 'none'
+    mode = ('overfit-check' if args.model_type == 'karel-lgrl-classifier' else 'debugger')
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -580,7 +582,7 @@ def get_karel_eval_dataset(args, model):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2)
