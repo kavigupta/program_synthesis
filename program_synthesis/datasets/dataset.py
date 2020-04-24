@@ -488,7 +488,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided "
 
     add_trace = args.karel_trace_enc != 'none'
-    mode = ('overfit-check' if args.model_type == 'karel-lgrl-classifier' else 'debugger')
+    mode = ('overfit-check' if args.model_type == 'karel-lgrl-overfit' else 'debugger')
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -569,7 +569,7 @@ def get_karel_eval_dataset(args, model):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided but were {} and {}".format(args.karel_mutate_ref, file_ref)
 
     add_trace = args.karel_trace_enc != 'none'
-    mode = ('overfit-check' if args.model_type == 'karel-lgrl-classifier' else 'debugger')
+    mode = ('overfit-check' if args.model_type == 'karel-lgrl-overfit' else 'debugger')
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
