@@ -283,7 +283,7 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
-def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True, code_is_correct=None):
+def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True, code_is_correct=None, beams=None):
     from ..dataset import KarelExample
     if check_ref_example:
         assert karel_example.ref_example is None
@@ -303,6 +303,7 @@ def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_e
         input_tests=new_tests,
         tests=karel_example.tests,
         code_is_correct=code_is_correct)
+    karel_example.ref_beams = beams
     return karel_example
 
 
@@ -332,7 +333,7 @@ class KarelExampleMutator(object):
 
 
 class KarelOutputRefExampleMutator(object):
-    def __init__(self, to_be_used_indices, ref_code, code_is_correct, add_trace):
+    def __init__(self, to_be_used_indices, ref_code, code_is_correct, beams, add_trace):
         """
         Represents a list of reference outputs, one per example in the training data.
 
@@ -346,11 +347,16 @@ class KarelOutputRefExampleMutator(object):
                 Each of these examples must correspond to the equivalent index in
                 to_be_used_indices
 
+            code_is_correct: a list of whether each code example is correct
+
+            beams: a list of all the beams (including ref_code) for each code example
+
             add_trace: whether to add the execution trace when modifying a program
         """
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
         self.to_be_used_indices = to_be_used_indices
+        self.beams = beams
         self.code_is_correct = code_is_correct
         self.ref_code = ref_code
 
@@ -395,7 +401,9 @@ class KarelOutputRefExampleMutator(object):
             to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
         code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
-        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, code_is_correct, add_trace)
+        # get each of the beams. If not found the output is the only beam
+        beams = [examples[i].get('beams', [examples[i]['output']]) for i in to_be_used_idx]
+        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
         return [index[i] for i in self.to_be_used_indices]
@@ -403,7 +411,7 @@ class KarelOutputRefExampleMutator(object):
     def __call__(self, idx, karel_example):
         assert self.ref_code[idx]
         result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor,
-                                    code_is_correct=self.code_is_correct[idx])
+                                    code_is_correct=self.code_is_correct[idx], beams=self.beams[idx])
         assert result.ref_example.code_sequence
         return result
 
