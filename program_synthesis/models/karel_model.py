@@ -424,10 +424,11 @@ class KarelLGRLOverfitModel(BaseKarelModel):
 
     def inference(self, input_tuple):
         # TODO actually implement this, and once implemented, reimplement debug().
-        return self.common_forward(input_tuple)
+        results = self.common_forward(input_tuple)
+        return results[:, 1] - results[:, 0]
 
     def debug(self, batch):
-        yhat = self.inference(batch).max(1).indices.cpu().numpy().astype(np.bool)
+        yhat = (self.inference(batch) > 0).cpu().numpy().astype(np.bool)
         y = np.array(self.get_labels(batch.orig_examples), dtype=np.bool)
 
         false_positives = np.sum(yhat & ~y)
