@@ -10,7 +10,7 @@ from collections import Counter
 
 
 def valid_checkpoints():
-    for logdir in glob.glob('logdirs/*', recursive=True):
+    for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
         numbers = []
@@ -30,7 +30,7 @@ def valid_checkpoints():
             numbers.append(ckpt_number)
         numbers.sort(reverse=True)
         for idx, ckpt_number in enumerate(numbers):
-            yield (logdir, ckpt_number), (idx, len(numbers))
+            yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
 
 
 def valid_modes_and_params():
@@ -70,20 +70,29 @@ def main(args):
     else:
         batch_size = 16 if args.cpu else 64
     by_priority = []
-    for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
+    for (logdir, ckpt_number), (index_last, num_checkpoints), is_overfit_model in valid_checkpoints():
         for (mode, param, render_param), when, extra_args in valid_modes_and_params():
+            if is_overfit_model:
+                if mode != 'real':
+                    continue
+                if param[1] != '':
+                    continue
+                if param[0] == 'nearai':
+                    continue
+
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
             if already_executed(output_path):
                 continue
 
-            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref --evaluate-on-all '
+            command = ('python -u program_synthesis/eval.py --model_type {model_type} --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
                        '--batch_size {batch_size} '
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
+                model_type='karel-lgrl-overfit' if is_overfit_model else 'karel-lgrl-ref',
                 batch_size=batch_size,
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
@@ -108,7 +117,9 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if index_last == 0:
+            if is_overfit_model:
+                priority = 1
+            elif index_last == 0:
                 priority = 11
             elif num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
                 priority = 21
