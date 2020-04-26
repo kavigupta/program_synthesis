@@ -361,7 +361,7 @@ class KarelOutputRefExampleMutator(object):
         self.ref_code = ref_code
 
     @staticmethod
-    def from_path(karel_ref_file_train, add_trace, mode='debugger'):
+    def from_path(karel_ref_file_train, add_trace, mode='debugger', for_eval=False):
         """
         Get a mutator from the given file.
 
@@ -372,6 +372,8 @@ class KarelOutputRefExampleMutator(object):
                 If 'debugger', load all examples which do not pass all 5 test cases
                 If 'overfit-check', load all examples which pass 5 test cases, and
                     ensure an equal number pass the held out test or not.
+            for_eval: whether the given dataset will be used for evaluation or not. If so, do not require a 50/50 split
+                in some cases
         """
         if karel_ref_file_train is None:
             return None
@@ -397,7 +399,7 @@ class KarelOutputRefExampleMutator(object):
         }[mode]
 
         to_be_used_idx = [i for i, x in enumerate(examples) if can_be_used(x)]
-        if mode == 'overfit-check':
+        if mode == 'overfit-check' and not for_eval:
             to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
         code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
