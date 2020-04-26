@@ -16,6 +16,8 @@ import arguments
 
 from tools.iterative_search import IterativeSearch, Strategy, TimeLimitStrategy
 
+from models.karel_model import KarelLGRLOverfitModel
+
 
 def evaluate(args):
     print("Evaluation:")
@@ -38,6 +40,14 @@ def evaluate(args):
         eval_dataset.data = [eval_dataset.task[args.example_id]]
 
     inference = m.inference
+
+    if isinstance(m, KarelLGRLOverfitModel):
+        evaluation.run_overfit_eval(
+            eval_dataset, inference,
+            args.report_path,
+            limit=args.limit)
+
+        return
 
     if args.iterative_search is not None:
         inference = IterativeSearch(inference,
