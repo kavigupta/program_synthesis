@@ -254,7 +254,8 @@ def run_overfit_eval(dataset, inference, report_path=None, limit=None):
         confusion=confusion.tolist(),
         fpr=fpr.tolist(),
         tpr=tpr.tolist(),
-        thresh=thresh.tolist()
+        thresh=thresh.tolist(),
+        done=True
     )
 
     if report_path:
