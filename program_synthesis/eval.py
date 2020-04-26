@@ -41,7 +41,7 @@ def evaluate(args):
 
     if args.iterative_search is not None:
         inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
-                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True))
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True), start_with_beams=args.iterative_search_start_with_beams)
     if args.run_predict:
         evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path, evaluate_on_all=args.evaluate_on_all)
     else:

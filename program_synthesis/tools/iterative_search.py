@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from collections import defaultdict
+from itertools import count
 
 from datasets.executor import evaluate_code
 from datasets.karel import mutation
@@ -9,20 +10,26 @@ from models.base import InferenceResult
 
 
 class IterativeSearch:
-    def __init__(self, original_inference, init_strategy, executor, add_trace, batch_processor):
+    def __init__(self, original_inference, init_strategy, executor, add_trace, batch_processor, start_with_beams):
         self.original_inference = original_inference
         self.init_strategy = init_strategy
         self.executor = executor
         self.add_trace = add_trace
         self.batch_processor = batch_processor
+        # whether to start with the beams from the original model
+        self.start_with_beams = start_with_beams
 
     def __call__(self, batch):
         strategies = [self.init_strategy(item) for item in batch.orig_examples]
         done = [False] * len(batch.orig_examples)
         attempts = [[] for _ in range(len(batch.orig_examples))]
         index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
-        while True:
-            results = [result.info['candidates'] for result in self.original_inference(batch)]
+        for iteration_idx in count():
+            if iteration_idx == 0 and self.start_with_beams:
+                results = [example.ref_beams for example in batch.orig_examples]
+                assert not any(x is None for x in results), "the original examples must contain a full list of reference beams"
+            else:
+                results = [result.info['candidates'] for result in self.original_inference(batch)]
             decisions = [strategy.decide(result, lambda code: self.test_results(code, example)) for
                          strategy, result, example in zip(strategies, results, batch.orig_examples)]
             new_index_mapping = {}
