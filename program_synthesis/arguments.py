@@ -18,7 +18,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--batch_size', type=int, default=4)#128
     parser.add_argument('--load-sync', action='store_true')
     parser.add_argument('--iterative-search', type=str, default=None)
-    parser.add_argument('--iterative-search-start-with-beams', action='store_false', help="start with the beams from the original model")
+    parser.add_argument('--iterative-search-start-with-beams', action='store_true', help="start with the beams from the original model")
     parser.add_argument('--iterative-search-step-limit', type=int, default=5)
     parser.add_argument('--num_placeholders', type=int, default=0)  # 100
     parser.add_argument('--use_ref_orig', action='store_true') # False
