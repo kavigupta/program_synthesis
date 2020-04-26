@@ -22,7 +22,7 @@ class IterativeSearch:
         attempts = [[] for _ in range(len(batch.orig_examples))]
         index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
         while True:
-            results = self.original_inference(batch)
+            results = [result.info['candidates'] for result in self.original_inference(batch)]
             decisions = [strategy.decide(result, lambda code: self.test_results(code, example)) for
                          strategy, result, example in zip(strategies, results, batch.orig_examples)]
             new_index_mapping = {}
@@ -65,7 +65,7 @@ class IterativeSearch:
 
 class Strategy(ABC):
     @abstractmethod
-    def decide(self, inference_result, evaluate):
+    def decide(self, candidates, evaluate):
         pass
 
     @staticmethod
@@ -91,10 +91,10 @@ class TimeLimitStrategy(Strategy):
         self.limit = limit
         self.step = 0
 
-    def decide(self, inference_result, evaluate):
+    def decide(self, candidates, evaluate):
         self.step += 1
         assert self.step <= self.limit
-        decision, node = self.strategy.decide(inference_result, evaluate)
+        decision, node = self.strategy.decide(candidates, evaluate)
         if self.step == self.limit:
             return 'accept', node
         return decision, node
@@ -113,9 +113,9 @@ class GreedyStrategy(Strategy):
         self.seen = set()
         del item  # no need
 
-    def decide(self, inference_result, evaluate):
+    def decide(self, candidates, evaluate):
         unseen = []
-        for considered in inference_result.info['candidates']:
+        for considered in candidates:
             considered = tuple(considered)
             if considered in self.seen:
                 continue
@@ -126,7 +126,7 @@ class GreedyStrategy(Strategy):
                 return 'accept', considered
             unseen.append((res['correct'], considered))
         if not unseen:
-            return 'accept', inference_result.info['candidates'][0]
+            return 'accept', candidates[0]
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
         return 'expand', unseen[0][1]
@@ -137,8 +137,8 @@ class BestFirstSearch(Strategy):
         self.seen = set()
         self.by_number_correct = defaultdict(list)
 
-    def decide(self, inference_result, evaluate):
-        for considered in inference_result.info['candidates']:
+    def decide(self, candidates, evaluate):
+        for considered in candidates:
             considered = tuple(considered)
             if considered in self.seen:
                 continue
@@ -154,4 +154,4 @@ class BestFirstSearch(Strategy):
             if self.by_number_correct[n_correct]:
                 return 'expand', self.by_number_correct[n_correct].pop(0)
 
-        return 'accept', tuple(inference_result.info['candidates'][0])
+        return 'accept', tuple(candidates[0])
