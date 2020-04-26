@@ -38,14 +38,18 @@ def valid_modes_and_params():
         if mode in {'train', 'eval'}:
             params = '1', '0,1', '0,0,1'
             for param in params:
-                yield (mode, param, param), 'always'
+                yield (mode, param, param), 'always', ''
         elif mode == 'real':
             for model in 'nearai', 'nearai32':
-                yield (mode, (model, ''), model), 'always'
+                yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25:
                     for strategy in 'greedy', 'best_first':
-                        when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
-                        yield (mode, (model, (strategy, limit)), "{},,{},,{}".format(model, strategy, limit)), when
+                        when = 'always' if strategy == 'best_first' else 'sometimes'
+                        for extra in '', '--iterative-search-start-with-beams':
+                            if not (extra == '' or strategy == 'best_first'):
+                                continue
+                            render_extra = '' if extra == '' else ',,start-with-beams'
+                            yield (mode, (model, (strategy, limit)), "{},,{},,{}{}".format(model, strategy, limit, render_extra)), when, extra
         else:
             assert False
 
@@ -67,7 +71,7 @@ def main(args):
         batch_size = 16 if args.cpu else 64
     by_priority = []
     for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
-        for (mode, param, render_param), when in valid_modes_and_params():
+        for (mode, param, render_param), when, extra_args in valid_modes_and_params():
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
@@ -84,6 +88,8 @@ def main(args):
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
             )
+
+            command += extra_args + ' '
 
             if mode == 'real':
                 model_data, search_param = param

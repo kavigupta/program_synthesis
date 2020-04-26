@@ -40,10 +40,18 @@ def evaluate(args):
     inference = m.inference
 
     if args.iterative_search is not None:
-        inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
-                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True), start_with_beams=args.iterative_search_start_with_beams)
+        inference = IterativeSearch(inference,
+                                    TimeLimitStrategy.limit(Strategy.get(args.iterative_search),
+                                                            # add one step if you are starting with the beams as
+                                                            # the first step of the strategy is unrelated to the beams
+                                                            args.iterative_search_step_limit + bool(
+                                                                args.iterative_search_start_with_beams)),
+                                    current_executor,
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True),
+                                    start_with_beams=args.iterative_search_start_with_beams)
     if args.run_predict:
-        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path, evaluate_on_all=args.evaluate_on_all)
+        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path,
+                               evaluate_on_all=args.evaluate_on_all)
     else:
         evaluation.run_eval(
             args.tag, eval_dataset, inference,
