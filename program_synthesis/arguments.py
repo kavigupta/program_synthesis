@@ -144,6 +144,7 @@ def get_arg_parser(title, mode):
                                                             'before loading but the ranges do overlap as '
                                                             'expected')
     infer_group.add_argument('--karel-file-ref-val', help='see help for --karel-ref-file-train')
+    infer_group.add_argument('--karel-mutate-ref', action='store_true')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
     runtime_group = parser.add_argument_group('runtime')
