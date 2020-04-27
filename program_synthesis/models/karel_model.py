@@ -423,7 +423,6 @@ class KarelLGRLOverfitModel(BaseKarelModel):
         return loss_val
 
     def inference(self, input_tuple):
-        # TODO actually implement this, and once implemented, reimplement debug().
         results = self.common_forward(input_tuple)
         return results[:, 1] - results[:, 0]
 
