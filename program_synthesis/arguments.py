@@ -134,7 +134,15 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
     infer_group.add_argument('--search-bfs', action='store_true', default=True)
     infer_group.add_argument('--karel-file-ref-train', help='json file containing a list of dictionaries with keys '
-                                                            'is_correct, passes_given_tests, and output.')
+                                                            'is_correct, passes_given_tests, and output. '
+                                                            'You can add a colon followed by keyword args '
+                                                            'start= and end=, which determine which segment '
+                                                            'of the indices to use. For example, '
+                                                            '--karel-file-ref-train x.json:start=0.2,end=0.8 '
+                                                            'loads the middle 60% of the indices. '
+                                                            'The indices are shuffled deterministically '
+                                                            'before loading but the ranges do overlap as '
+                                                            'expected')
     infer_group.add_argument('--karel-file-ref-val', help='see help for --karel-ref-file-train')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 

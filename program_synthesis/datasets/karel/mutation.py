@@ -366,7 +366,7 @@ class KarelOutputRefExampleMutator(object):
         Get a mutator from the given file.
 
         Arguments:
-            karel_ref_file_train: the file to get the data from
+            karel_ref_file_train: the file to get the data from. Can also include some keyword arguments (see arguments.py)
             add_trace: whether or not to add the traces
             mode: which mode to load the data in.
                 If 'debugger', load all examples which do not pass all 5 test cases
@@ -378,8 +378,14 @@ class KarelOutputRefExampleMutator(object):
         if karel_ref_file_train is None:
             return None
 
+        if ":" in karel_ref_file_train:
+            karel_ref_file_train, kwargs = karel_ref_file_train.split(":")
+            kwargs = eval("dict({})".format(kwargs))
+
         with open(karel_ref_file_train) as f:
             examples = json.load(f)
+
+        valid_indices = cls.valid_indices(len(examples), **kwargs)
 
         parser = KarelForSynthesisParser()
 
@@ -398,9 +404,10 @@ class KarelOutputRefExampleMutator(object):
             'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x)
         }[mode]
 
-        to_be_used_idx = [i for i, x in enumerate(examples) if can_be_used(x)]
+        to_be_used_idx = [i for i, x in enumerate(examples) if i in valid_indices and can_be_used(x)]
         if mode == 'overfit-check' and not for_eval:
             to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
+
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
         code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
@@ -417,6 +424,11 @@ class KarelOutputRefExampleMutator(object):
         assert result.ref_example.code_sequence
         return result
 
+    @classmethod
+    def valid_indices(cls, length, start=0, end=1):
+        indices = list(range(length))
+        np.random.RandomState(0).shuffle(indices)
+        return set(indices[int(length * start) : int(length * end)])
 
 def equal_halves(items, predicate, seed=0):
     rng = np.random.RandomState(seed)
