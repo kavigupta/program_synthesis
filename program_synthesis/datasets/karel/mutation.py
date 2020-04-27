@@ -360,8 +360,8 @@ class KarelOutputRefExampleMutator(object):
         self.code_is_correct = code_is_correct
         self.ref_code = ref_code
 
-    @staticmethod
-    def from_path(karel_ref_file_train, add_trace, mode='debugger', for_eval=False):
+    @classmethod
+    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False):
         """
         Get a mutator from the given file.
 
@@ -405,7 +405,7 @@ class KarelOutputRefExampleMutator(object):
         code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
         beams = [examples[i].get('beams', [examples[i]['output']]) for i in to_be_used_idx]
-        return KarelOutputRefExampleMutator(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
+        return cls(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
         return [index[i] for i in self.to_be_used_indices]
