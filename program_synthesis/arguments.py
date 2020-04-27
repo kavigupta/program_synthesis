@@ -134,10 +134,8 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
     infer_group.add_argument('--search-bfs', action='store_true', default=True)
     infer_group.add_argument('--karel-file-ref-train', help='json file containing a list of dictionaries with keys '
-                                                            'is_correct and output, incorrect examples will be used')
-    infer_group.add_argument('--karel-file-ref-val', help='json file containing a list of dictionaries with keys '
-                                                          'is_correct and output, incorrect examples will be used')
-    infer_group.add_argument('--karel-mutate-ref', action='store_true')
+                                                            'is_correct, passes_given_tests, and output.')
+    infer_group.add_argument('--karel-file-ref-val', help='see help for --karel-ref-file-train')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
     runtime_group = parser.add_argument_group('runtime')
