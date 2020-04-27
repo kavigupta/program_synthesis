@@ -381,6 +381,8 @@ class KarelOutputRefExampleMutator(object):
         if ":" in karel_ref_file_train:
             karel_ref_file_train, kwargs = karel_ref_file_train.split(":")
             kwargs = eval("dict({})".format(kwargs))
+        else:
+            kwargs = {}
 
         with open(karel_ref_file_train) as f:
             examples = json.load(f)
