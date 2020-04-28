@@ -14,7 +14,7 @@ import tools
 import models
 import arguments
 
-from tools.iterative_search import IterativeSearch, Strategy, TimeLimitStrategy
+from tools.iterative_search import IterativeSearch, Strategy
 
 from models.karel_model import KarelLGRLOverfitModel
 
@@ -51,14 +51,11 @@ def evaluate(args):
 
     if args.iterative_search is not None:
         inference = IterativeSearch(inference,
-                                    TimeLimitStrategy.limit(Strategy.get(args.iterative_search),
-                                                            # add one step if you are starting with the beams as
-                                                            # the first step of the strategy is unrelated to the beams
-                                                            args.iterative_search_step_limit + bool(
-                                                                args.iterative_search_start_with_beams)),
+                                    Strategy.get(args.iterative_search),
                                     current_executor,
                                     args.karel_trace_enc != 'none', m.batch_processor(for_eval=True),
-                                    start_with_beams=args.iterative_search_start_with_beams)
+                                    start_with_beams=args.iterative_search_start_with_beams,
+                                    time_limit=args.iterative_search_step_limit)
     if args.run_predict:
         evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path,
                                evaluate_on_all=args.evaluate_on_all)
