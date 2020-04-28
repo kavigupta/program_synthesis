@@ -403,7 +403,8 @@ class KarelOutputRefExampleMutator(object):
 
         can_be_used = {
             'debugger': lambda x: not passes_given_tests(x) and is_valid_syntax(x),
-            'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x)
+            'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x),
+            'all': is_valid_syntax
         }[mode]
 
         to_be_used_idx = [i for i, x in enumerate(examples) if i in valid_indices and can_be_used(x)]

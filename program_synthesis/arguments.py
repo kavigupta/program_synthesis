@@ -20,6 +20,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--iterative-search', type=str, default=None)
     parser.add_argument('--iterative-search-start-with-beams', action='store_true', help="start with the beams from the original model")
     parser.add_argument('--iterative-search-step-limit', type=int, default=5)
+    parser.add_argument('--iterative-search-use-overfit-model', help="k=v,k=v... pairs of data to put into the overfit model")
     parser.add_argument('--num_placeholders', type=int, default=0)  # 100
     parser.add_argument('--use_ref_orig', action='store_true') # False
     parser.add_argument('--model_nickname', type=str, default='')
