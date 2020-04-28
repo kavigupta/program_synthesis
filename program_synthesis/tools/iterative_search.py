@@ -119,9 +119,11 @@ class GreedyStrategy(Strategy):
             if not valid(considered, res):
                 continue
             if res['correct'] == res['total']:
+                self.seen.add(considered)
                 return 'accept', considered
             unseen.append((res['correct'], considered))
         if not unseen:
+            self.seen.add(candidates[0])
             return 'accept', candidates[0]
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
@@ -141,13 +143,13 @@ class BestFirstSearch(Strategy):
             res = evaluate(considered)
             if not valid(considered, res):
                 continue
-            if res['correct'] == res['total']:
-                return 'accept', considered
             self.seen.add(considered)
+            assert res['total'] == 5
             self.by_number_correct[res['correct']].append(considered)
 
         for n_correct in sorted(self.by_number_correct, reverse=True):
             if self.by_number_correct[n_correct]:
-                return 'expand', self.by_number_correct[n_correct].pop(0)
+                decision = 'accept' if n_correct == 5 else 'expand'
+                return decision, self.by_number_correct[n_correct].pop(0)
 
         return 'accept', tuple(candidates[0])
