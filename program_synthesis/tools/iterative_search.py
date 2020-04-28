@@ -42,7 +42,8 @@ class IterativeSearch:
             new_wrong_code = []
             new_batch = []
             for idx, decision in enumerate(decisions):
-                if decision[0] == 'accept' or num_inferences == self.time_limit:
+                give_up = num_inferences == self.time_limit and not finalized_candidates[index_mapping[idx]]
+                if decision[0] == 'accept' or give_up:
                     finalized_candidates[index_mapping[idx]].append(decision[1])
                     done[index_mapping[idx]] = True
                 elif decision[0] == 'expand':
