@@ -49,9 +49,30 @@ def valid_modes_and_params():
                             if not (extra == '' or strategy == 'best_first'):
                                 continue
                             render_extra = '' if extra == '' else ',,start-with-beams'
-                            yield (mode, (model, (strategy, limit)), "{},,{},,{}{}".format(model, strategy, limit, render_extra)), when, extra
+                            for overfit_model, overfit_cmd in overfit_models_to_use():
+                                if overfit_model == '':
+                                    render_extra_with = render_extra
+                                    extra_with = extra
+                                else:
+                                    if strategy != 'best_first':
+                                        continue
+                                    render_extra_with = render_extra + ',,overfit=' + overfit_model
+                                    extra_with = extra + " " + overfit_cmd
+                                yield (mode, (model, (strategy, limit)), "{},,{},,{}{}".format(model, strategy, limit, render_extra_with)), when, extra_with
         else:
             assert False
+
+def overfit_models_to_use():
+    models = [
+        (2000, "overfit-vanilla-slow-split"),
+        (2000, "overfit-aggregate-with-io-slow-split")
+    ]
+    yield '', ''
+    for step, model in models:
+        [logdir] = glob.glob("logdirs-overfit/{},*".format(model))
+        param = 'dataset="karel",step={},model_dir="{}"'.format(step, logdir)
+        cmd = "--iterative-search-use-overfit-model '{}'".format(param)
+        yield model.replace("-", "_"), cmd
 
 
 def already_executed(output_path):
