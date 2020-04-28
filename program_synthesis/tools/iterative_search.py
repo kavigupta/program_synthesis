@@ -24,6 +24,7 @@ class IterativeSearch:
     def __call__(self, batch):
         strategies = [self.init_strategy(item) for item in batch.orig_examples]
         done = [False] * len(batch.orig_examples)
+        finalized_candidates = [[] for _ in range(len(batch.orig_examples))]
         attempts = [[] for _ in range(len(batch.orig_examples))]
         index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
         num_inferences = 0
@@ -42,7 +43,8 @@ class IterativeSearch:
             new_batch = []
             for idx, decision in enumerate(decisions):
                 if decision[0] == 'accept' or num_inferences == self.time_limit:
-                    done[index_mapping[idx]] = decision[1]
+                    finalized_candidates[index_mapping[idx]].append(decision[1])
+                    done[index_mapping[idx]] = True
                 elif decision[0] == 'expand':
                     attempts[index_mapping[idx]].append(decision[1])
                     new_wrong_code.append(decision[1])
@@ -53,13 +55,17 @@ class IterativeSearch:
                     raise ValueError(
                         "Invalid decision: {}. The first element must be either 'accept' or 'expand' but was {}".format(
                             decision, decision[0]))
-            if all(x is not False for x in done):
+            if all(done):
                 break
             index_mapping = new_index_mapping
             strategies = new_strategies
             batch = self.update_wrong_code_and_pack(new_batch, new_wrong_code)
+
+        assert all(len(candidates) == 1 for candidates in finalized_candidates)
+        best_code = [candidates[0] for candidates in finalized_candidates]
+
         return [InferenceResult(code_sequence=code, info={'candidates' : [code], 'expanded' : [expanded]})
-                   for code, expanded in zip(done, attempts)]
+                   for code, expanded in zip(best_code, attempts)]
 
     def update_wrong_code_and_pack(self, new_examples, new_wrong_code):
         assert new_examples
