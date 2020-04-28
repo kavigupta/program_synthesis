@@ -31,12 +31,14 @@ class IterativeSearch:
         done = [False] * len(batch.orig_examples)
         finalized_candidates = [[] for _ in range(len(batch.orig_examples))]
         attempts = [[] for _ in range(len(batch.orig_examples))]
-        index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
+        index_mapping = {i: i for i in
+                         range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
         num_inferences = 0
         for iteration_idx in count():
             if iteration_idx == 0 and self.start_with_beams:
                 results = [example.ref_beams for example in batch.orig_examples]
-                assert not any(x is None for x in results), "the original examples must contain a full list of reference beams"
+                assert not any(
+                    x is None for x in results), "the original examples must contain a full list of reference beams"
             else:
                 results = [result.info['candidates'] for result in self.original_inference(batch)]
                 num_inferences += 1
@@ -116,7 +118,6 @@ class IterativeSearch:
         results = []
         for items in chunked(zip(flattened_examples, flattened_candidates), len(original_batch.orig_examples)):
             results += self.run_overfit_model(items).cpu().detach().numpy().tolist()
-
         best_code = []
         for idxs, candidates in zip(indices_per_original, finalized_candidates):
             best_idx = max(range(len(candidates)), key=lambda i: results[idxs[i]])
@@ -139,6 +140,7 @@ class Strategy(ABC):
             'greedy': lambda: GreedyStrategy,
             'best_first': lambda: BestFirstSearch
         }[start](**kwargs)
+
 
 def valid(considered_program, result):
     if not considered_program:
