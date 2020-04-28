@@ -285,6 +285,7 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
 
 def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True, code_is_correct=None, beams=None):
     from ..dataset import KarelExample
+    karel_example = copy.copy(karel_example)
     if check_ref_example:
         assert karel_example.ref_example is None
     # TODO: Get the real trace
