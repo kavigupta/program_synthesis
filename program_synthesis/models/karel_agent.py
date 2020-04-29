@@ -130,8 +130,7 @@ class RolloutStorage(object):
                         next_value,
                         use_gae,
                         gamma,
-                        gae_lambda,
-                        use_proper_time_limits=True):
+                        gae_lambda):
         if use_gae:
             self.value_preds[-1] = next_value
             gae = 0
@@ -167,27 +166,20 @@ class RolloutStorage(object):
             
             #for offset in range(num_envs_per_batch):
             #    ind = perm[start_ind + offset]
-            obs_batch = self.obs[:self.num_steps]
-            recurrent_hidden_states_batch = self.recurrent_hidden_states[:self.num_steps]
-            actions_batch = self.actions[:self.num_steps]
-            value_preds_batch = self.value_preds[:self.num_steps]
-            return_batch = self.returns[:self.num_steps]
-            masks_batch = self.masks[:self.num_steps]
-            old_action_log_probs_batch = self.action_log_probs[:self.step]
-            adv_targ = advantages[:self.num_steps]
+            obs_batch = self.obs[1:self.num_steps+1]
+            recurrent_hidden_states_batch = self.recurrent_hidden_states[1:self.num_steps+1]
+            actions_batch = self.actions[1:self.num_steps+1]
+            value_preds_batch = self.value_preds[1:self.num_steps+1]
+            return_batch = self.returns[1:self.num_steps+1]
+            masks_batch = self.masks[1:self.num_steps+1]
+            old_action_log_probs_batch = self.action_log_probs[1:self.num_steps+1]
+            adv_targ = advantages[1:self.num_steps+1]
 
+            print(self.value_preds[1:self.num_steps+2])
 
             # make sure to extract correct items from the storage to compare with new computations
-            T, N = self.num_steps, num_envs_per_batch
+            T, N = self.num_steps, num_processes
             # These are all tensors of size (T, N, -1)
-            obs_batch = torch.stack(obs_batch, 1)
-            actions_batch = torch.stack(actions_batch, 1)
-            value_preds_batch = torch.stack(value_preds_batch, 1)
-            return_batch = torch.stack(return_batch, 1)
-            masks_batch = torch.stack(masks_batch, 1)
-            old_action_log_probs_batch = torch.stack(
-                old_action_log_probs_batch, 1)
-            adv_targ = torch.stack(adv_targ, 1)
 
             # States is just a (N, -1) tensor
             #recurrent_hidden_states_batch = torch.stack(
@@ -198,7 +190,7 @@ class RolloutStorage(object):
             actions_batch = _flatten_helper(T, N, actions_batch)
             value_preds_batch = _flatten_helper(T, N, value_preds_batch)
             return_batch = _flatten_helper(T, N, return_batch)
-            masks_batch = _flatten_helper(T, N, masks_batch)
+            #masks_batch = _flatten_helper(T, N, masks_batch)
             old_action_log_probs_batch = _flatten_helper(T, N, \
                     old_action_log_probs_batch)
             adv_targ = _flatten_helper(T, N, adv_targ)
@@ -240,8 +232,6 @@ class PPO():
         dist_entropy_epoch = 0
 
         for e in range(self.ppo_epoch):
-
-            breakpoint
             
             data_generator = rollouts.recurrent_generator(
                     advantages, self.num_mini_batch)
@@ -286,7 +276,7 @@ class PPO():
                 dist_entropy_epoch += dist_entropy.item()
 
         num_updates = self.ppo_epoch * self.num_mini_batch
-
+        breakpoint
         value_loss_epoch /= num_updates
         action_loss_epoch /= num_updates
         dist_entropy_epoch /= num_updates
@@ -994,7 +984,7 @@ class PolicyTrainer(object):
             self.actor_critic,
             self.args.clip_param,
             self.args.ppo_steps,
-            self.args.batch_size,
+            1,
             self.args.value_loss_coef,
             self.args.entropy_coef,
             max_grad_norm=self.args.max_grad_norm)
@@ -1009,8 +999,7 @@ class PolicyTrainer(object):
                 
                 next_value = rollouts.value_preds[-1] #actor_critic.get_value(rollouts.obs[-1], rollouts.recurrent_hidden_states[-1], rollouts.masks[-1]).detach()
                 
-                rollouts.compute_returns(next_value, args.use_gae, args.gamma,
-                                 args.gae_lambda, args.use_proper_time_limits)
+                rollouts.compute_returns(next_value, True, 0.99, 0.95)
 
                 value_loss, action_loss, dist_entropy = agent.update(rollouts)
 
