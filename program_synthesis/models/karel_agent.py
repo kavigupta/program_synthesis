@@ -7,6 +7,8 @@ import operator
 
 import torch
 import torch.nn as nn
+from torch.autograd import Variable
+import torch.nn.functional as F
 from torch import optim
 import pickle as pkl
 
@@ -32,6 +34,8 @@ EPISLON = 0.1
 ALPHA = 0.7
 
 StepExample = collections.namedtuple('StepExample', ['state', 'action', 'reward', 'new_state', 'value', 'lengths', 'acc'])
+BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs', 'log_probs_torch'])
+
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -41,6 +45,252 @@ def set_seed(seed):
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+class FixedCategorical(torch.distributions.Categorical):
+    def sample(self):
+        return super().sample().unsqueeze(-1)
+
+    def log_probs(self, actions):
+        return (
+            super()
+            .log_prob(actions.squeeze(-1))
+            .view(actions.size(0), -1)
+            .sum(-1)
+            .unsqueeze(-1)
+        )
+
+    def mode(self):
+        return self.probs.argmax(dim=-1, keepdim=True)
+
+
+class Categorical(nn.Module):
+    def __init__(self):
+        super(Categorical, self).__init__()
+
+    def forward(self, x):
+        return FixedCategorical(logits=x)
+
+
+
+def _flatten_helper(T, N, _tensor):
+    return _tensor.view(T * N, *_tensor.size()[2:])
+
+
+class RolloutStorage(object):
+    def __init__(self, num_steps, num_processes):
+        self.obs = [[] for i in range(num_steps)] # torch.zeros(num_steps + 1, num_processes, *obs_shape)
+        self.recurrent_hidden_states = [[] for i in range(num_steps)]#torch.zeros( num_steps + 1, num_processes, recurrent_hidden_state_size)
+        self.rewards = torch.zeros(num_steps, num_processes, 1)
+        self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
+        self.returns = torch.zeros(num_steps + 1, num_processes, 1)
+        self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
+
+        self.actions = torch.zeros(num_steps, num_processes)
+
+        self.masks = torch.zeros(num_steps + 1, num_processes, 1)
+
+        # Masks that indicate whether it's a true terminal state
+        # or time limit end state
+        self.bad_masks = torch.zeros(num_steps + 1, num_processes, 1)
+
+        self.num_steps = num_steps
+        self.step = 0
+
+    def to(self, device):
+        #self.obs = self.obs.to(device)
+        #self.recurrent_hidden_states = self.recurrent_hidden_states.to(device)
+        self.rewards = self.rewards.to(device)
+        self.value_preds = self.value_preds.to(device)
+        self.returns = self.returns.to(device)
+        self.action_log_probs = self.action_log_probs.to(device)
+        self.actions = self.actions.to(device)
+        self.masks = self.masks.to(device)
+        self.bad_masks = self.bad_masks.to(device)
+
+    def insert(self, obs, recurrent_hidden_states, actions, action_log_probs,
+               value_preds, rewards, masks, bad_masks):
+        self.obs[self.step] = obs
+        self.recurrent_hidden_states[self.step] = recurrent_hidden_states
+        self.actions[self.step].copy_(actions)
+        self.action_log_probs[self.step].copy_(action_log_probs)
+        self.value_preds[self.step].copy_(value_preds)
+        self.rewards[self.step].copy_(rewards)
+        self.masks[self.step + 1].copy_(masks)
+        self.bad_masks[self.step + 1].copy_(bad_masks)
+
+        self.step = (self.step + 1) #% self.num_steps
+
+    def after_update(self):
+        self.obs[0].copy_(self.obs[-1])
+        self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
+        self.masks[0].copy_(self.masks[-1])
+        self.bad_masks[0].copy_(self.bad_masks[-1])
+
+    def compute_returns(self,
+                        next_value,
+                        use_gae,
+                        gamma,
+                        gae_lambda,
+                        use_proper_time_limits=True):
+        if use_gae:
+            self.value_preds[-1] = next_value
+            gae = 0
+            for step in reversed(range(self.rewards.size(0))):
+                delta = self.rewards[step] + gamma * self.value_preds[
+                    step + 1] * self.masks[step +
+                                            1] - self.value_preds[step]
+                gae = delta + gamma * gae_lambda * self.masks[step +
+                                                                1] * gae
+                self.returns[step] = gae + self.value_preds[step]
+        else:
+            self.returns[-1] = next_value
+            for step in reversed(range(self.rewards.size(0))):
+                self.returns[step] = self.returns[step + 1] * \
+                    gamma * self.masks[step + 1] + self.rewards[step]
+
+    def recurrent_generator(self, advantages, num_mini_batch):
+        num_processes = self.rewards.size(1)
+        assert num_processes >= num_mini_batch, (
+            "PPO requires the number of processes ({}) "
+            "to be greater than or equal to the number of "
+            "PPO mini batches ({}).".format(num_processes, num_mini_batch))
+        num_envs_per_batch = num_processes // num_mini_batch
+        for start_ind in range(0, num_processes, num_envs_per_batch):
+            obs_batch = []
+            recurrent_hidden_states_batch = []
+            actions_batch = []
+            value_preds_batch = []
+            return_batch = []
+            masks_batch = []
+            old_action_log_probs_batch = []
+            adv_targ = []
+
+            for offset in range(num_envs_per_batch):
+                ind = perm[start_ind + offset]
+                obs_batch.append(self.obs[:-1, ind])
+                recurrent_hidden_states_batch.append(
+                    self.recurrent_hidden_states[0:1, ind])
+                actions_batch.append(self.actions[:, ind])
+                value_preds_batch.append(self.value_preds[:-1, ind])
+                return_batch.append(self.returns[:-1, ind])
+                masks_batch.append(self.masks[:-1, ind])
+                old_action_log_probs_batch.append(
+                    self.action_log_probs[:, ind])
+                adv_targ.append(advantages[:, ind])
+
+            T, N = self.num_steps, num_envs_per_batch
+            # These are all tensors of size (T, N, -1)
+            obs_batch = torch.stack(obs_batch, 1)
+            actions_batch = torch.stack(actions_batch, 1)
+            value_preds_batch = torch.stack(value_preds_batch, 1)
+            return_batch = torch.stack(return_batch, 1)
+            masks_batch = torch.stack(masks_batch, 1)
+            old_action_log_probs_batch = torch.stack(
+                old_action_log_probs_batch, 1)
+            adv_targ = torch.stack(adv_targ, 1)
+
+            # States is just a (N, -1) tensor
+            #recurrent_hidden_states_batch = torch.stack(
+            #    recurrent_hidden_states_batch, 1).view(N, -1)
+
+            # Flatten the (T, N, ...) tensors to (T * N, ...)
+            #obs_batch = _flatten_helper(T, N, obs_batch)
+            actions_batch = _flatten_helper(T, N, actions_batch)
+            value_preds_batch = _flatten_helper(T, N, value_preds_batch)
+            return_batch = _flatten_helper(T, N, return_batch)
+            masks_batch = _flatten_helper(T, N, masks_batch)
+            old_action_log_probs_batch = _flatten_helper(T, N, \
+                    old_action_log_probs_batch)
+            adv_targ = _flatten_helper(T, N, adv_targ)
+
+            yield obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, adv_targ
+
+
+class PPO():
+    def __init__(self,
+                 actor_critic,
+                 clip_param,
+                 ppo_epoch,
+                 num_mini_batch,
+                 value_loss_coef,
+                 entropy_coef,
+                 max_grad_norm=None,
+                 use_clipped_value_loss=True):
+
+        self.actor_critic = actor_critic
+
+        self.clip_param = clip_param
+        self.ppo_epoch = ppo_epoch
+        self.num_mini_batch = num_mini_batch
+
+        self.value_loss_coef = value_loss_coef
+        self.entropy_coef = entropy_coef
+
+        self.max_grad_norm = max_grad_norm
+        self.use_clipped_value_loss = use_clipped_value_loss
+
+    def update(self, rollouts):
+        advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
+        advantages = (advantages - advantages.mean()) / (
+            advantages.std() + 1e-5)
+
+        value_loss_epoch = 0
+        action_loss_epoch = 0
+        dist_entropy_epoch = 0
+
+        for e in range(self.ppo_epoch):
+            
+            data_generator = rollouts.recurrent_generator(
+                    advantages, self.num_mini_batch)
+
+            for sample in data_generator:
+                obs_batch, recurrent_hidden_states_batch, actions_batch, \
+                   value_preds_batch, return_batch, masks_batch, old_action_log_probs_batch, \
+                        adv_targ = sample
+
+                # Reshape to do in a single forward pass for all steps
+                values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
+                    obs_batch, recurrent_hidden_states_batch, masks_batch,
+                    actions_batch)
+
+                ratio = torch.exp(action_log_probs -
+                                  old_action_log_probs_batch)
+                surr1 = ratio * adv_targ
+                surr2 = torch.clamp(ratio, 1.0 - self.clip_param,
+                                    1.0 + self.clip_param) * adv_targ
+                action_loss = -torch.min(surr1, surr2).mean()
+
+                if self.use_clipped_value_loss:
+                    value_pred_clipped = value_preds_batch + \
+                        (values - value_preds_batch).clamp(-self.clip_param, self.clip_param)
+                    value_losses = (values - return_batch).pow(2)
+                    value_losses_clipped = (
+                        value_pred_clipped - return_batch).pow(2)
+                    value_loss = 0.5 * torch.max(value_losses,
+                                                 value_losses_clipped).mean()
+                else:
+                    value_loss = 0.5 * (return_batch - values).pow(2).mean()
+
+                self.optimizer.zero_grad()
+                (value_loss * self.value_loss_coef + action_loss -
+                 dist_entropy * self.entropy_coef).backward()
+                nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
+                                         self.max_grad_norm)
+                self.optimizer.step()
+
+                value_loss_epoch += value_loss.item()
+                action_loss_epoch += action_loss.item()
+                dist_entropy_epoch += dist_entropy.item()
+
+        num_updates = self.ppo_epoch * self.num_mini_batch
+
+        value_loss_epoch /= num_updates
+        action_loss_epoch /= num_updates
+        dist_entropy_epoch /= num_updates
+
+        return value_loss_epoch, action_loss_epoch, dist_entropy_epoch
+
 
 
 class KarelEditEnv(object):
@@ -63,229 +313,103 @@ class KarelEditEnv(object):
  
         return example
 
-    def compute_reward(self, ground_truth_edits, generated_edits, lengths, simple=True):
-        rewards = []
-
-        if not simple:
-            start,end = 0,0
-            for idx, length in enumerate(lengths):
-                m = length
-                reward = 0
-                end += length
-                g_t_edit = ground_truth_edits[start:end]
-                gen_edit = generated_edits[start:end]
-                for i in range(m):
-                    if (i <= m):
-                        token_true = ground_truth_edits[i]
-                        token_gen = generated_edits[i]
-                        if token_true == token_gen:
-                            reward += 1
-                        if token_true != token_gen:
-                            reward -= 1
-                    else:
-                        reward -= 1
-                reward /= length
-                rewards.append(reward)
-                start += length
-        else:
-            reward = 0
-            for i in range(len(ground_truth_edits)):
-                if ground_truth_edits[i] == generated_edits[i]:
-                    reward = 1
-                else:
-                    reward = -1
-                rewards.append(reward)
-
-        return rewards
-
-    def compute_acc_edits(self, ground_truth_edits, generated_edits):
-        correct_edits = 0
-        actual_edits = 0
-        for i in range(len(ground_truth_edits)):
-            if ground_truth_edits[i]> 3:
-                    actual_edits += 1
-            if ground_truth_edits[i] == generated_edits[i]:
-                if ground_truth_edits[i]> 3:
-                    correct_edits += 1
-        if actual_edits<1:
-            actual_edits = 1
-        return correct_edits/actual_edits
-
-
-    def edit_space_to_code_space_special_order(self, edit_codes, code_seqs, batches, order):
-        
-        def compute_op(edit_token):
-            if edit_token == 2:
-                op = 'keep'
-                return op
-            if edit_token == 3:
-                op = 'delete'
-                return op
-            if edit_token > 3:
-                if edit_token%2 == 0:
-                    op = 'insert'
-                    return op
-                if edit_token%2 != 0:
-                    op = 'replace'
-                    return op
-
-        def new_token(idx, edit_token, code_seq):
-            #    0: <s>
-            #   1: </s>
-            #   2: keep
-            #   3: delete
-            #   4: insert vocab 0
-            #   5: replace vocab 0
-            #   6: insert vocab 1
-            #   7: replace vocab 1
-
-            # Compute operation
-            if edit_token == 0:
-                return 0, code_seq, idx
-            elif edit_token == 1:
-                return 1, code_seq, idx
-            else:
-                op = compute_op(edit_token)
-
-            # new token to use
-            computed_token = int(np.floor((edit_token.item() - 4)/2))
-
-            # Check if out of bounds
-            if len(code_seq)<=idx:
-                out_of_seq = True
-            else:
-                out_of_seq = False
-            
-            # Check if empty
-            if len(code_seq)==0:
-                is_empty = True
-            else:
-                is_empty = False
-
-            if op == 'keep':
-                if out_of_seq:
-                    return None, code_seq, idx
-                if is_empty:
-                    return None, code_seq, 0
-                else:
-                    return int(code_seq[idx]), code_seq, idx+1
-            if op == 'delete':
-                if idx==0:
-                    return None, code_seq[1:], idx
-                if out_of_seq:
-                    return None, code_seq, idx
-                if is_empty:
-                    return None, code_seq, 0
-                else:
-                    code_seq = torch.cat((code_seq[:idx],code_seq[idx+1:]),dim=0)
-                    return None, code_seq, idx
-            if op == 'insert':
-                code_seq = torch.cat((code_seq[:idx],torch.tensor([computed_token]),code_seq[idx:]))
-                return int(code_seq[idx]), code_seq, idx+1
-            if op == 'replace':
-                if out_of_seq or is_empty:
-                    return None, code_seq, idx
-                else:
-                    code_seq[idx] = computed_token
-                    return int(computed_token), code_seq, idx
-
-
-        idxs = [0 for i in order]
-        next_states = [[] for i in order]
-        code_seqs = list(code_seqs)
-        for idx, code_seq in enumerate(code_seqs):
-            code_seqs[idx] = code_seq[code_seq>-1]
-
-        # (*) Does this one actually append the correct edit codes
-        edit_batches = [[] for i in order]
-        idx=0
-        sequence = []
-        for b in batches:
-            sequence = sequence + list(order[:b])
-        for idx, edit in enumerate(edit_codes):
-            if idx == len(sequence):
-                break
-            else:
-                i = sequence[idx]
-                edit_batches[i].append(edit_codes[idx])
-            
-        #for b in batches:
-        #    order_step = order[:b]
-        #    for i in order_step:
-        #        edit_batches[i].append(edit_codes[i+idx])
-        #    idx += int(b)
-            # Find out why this is needed?
-        #    if idx >= len(edit_codes)-disc:
-        #        break
-
-        for i in order:
-            for edit in edit_batches[i]:
-                value, code_seq, update = new_token(idxs[i], edit, code_seqs[i])
-                code_seqs[i] = code_seq
-                idxs[i] = update
-                if value != None:
-                    next_states[i].append(value)
-        for i in order:
-            if idxs[i] < len(code_seqs[i]):
-                for j in range(idxs[i], len(code_seqs[i])):
-                    if int(code_seqs[i][j])>-1:
-                        next_states[i].append(int(code_seqs[i][j]))
-        for i in order:
-            if len(next_states[i])==0:
-                next_states[i].append(0)
-                next_states[i].append(1)
-                bp = 0
-            if 1 not in next_states[i]:
-                next_states[i].append(1)
-
-        return next_states
-
-    def update_states(self, states, new_states):
-
-        input_grids, output_grids, code_seqs, \
-            dec_data, ref_code, ref_trace_grids,\
-                ref_trace_events, cag_interleave, orig_examples = states
-
-        for idx, or_ex in enumerate(orig_examples):
-            or_ex.ref_example.code_sequence = tuple([self.vocab.itos(ns) for ns in new_states[idx][0]])
-            or_ex.ref_example.text = tuple([self.vocab.itos(ns) for ns in new_states[idx][0]])
-
-        new_states = [[0] + ns[0] + [1] for ns in new_states]
-
-        lists_sorted, sort_to_orig, orig_to_sort = prepare_spec.sort_lists_by_length(new_states)
-
-        v = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(lists_sorted, 0), False, False)
-        lens = prepare_spec.lengths(lists_sorted)
-        ref_code_new =  prepare_spec.PackedSequencePlus(torch.nn.utils.rnn.pack_padded_sequence(
-                v, lens, batch_first=True), lens, sort_to_orig, orig_to_sort)
-
-        #ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor((ref_code_new.ps.data.numpy()>0) *ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
-
-        #ref_code_new = ref_code_new.with_new_ps(torch.nn.utils.rnn.PackedSequence(torch.tensor(ref_code_new.ps.data.numpy()), ref_code_new.ps.batch_sizes))
-
-        dec_data_new = self.refiner.compute_edit_ops_no_char(new_states, code_seqs, ref_code_new)
-        
-        #orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy_novocab(new_states, -1), False, False)
-        
-        return (input_grids, output_grids, code_seqs, dec_data_new, ref_code_new, ref_trace_grids, ref_trace_events, cag_interleave, orig_examples)
     
-    def rollout(self, state, agent, max_rollout_length):
-        # (*) check if traces work here
-        # Update they don't becuase the SL model doesn't even have traces: they are equal to none :/
-        experience = []
-        success = False
-        #mean_acc = []
-        for _ in range(max_rollout_length):
+    def rollout(self, state, agent, max_rollout_length, rollouts):
 
-            action = agent.select_action(state, return_true_code=True )
-            # Reward is calculated correct, however it should not split in chucks but in the weird order.
-            new_state, reward, done, acc = self.step(action)
-            experience.append(StepExample(state, action[1], reward, new_state, action[3], action[4], acc))
-            new_state = self.update_states(state, new_state)
-            state = new_state
-            #mean_acc.append(list(acc))
+        init_state, masked_memory = agent.model.prepare_state(state)
+
+        tt = torch.cuda if self.args.cuda else torch
+        beam_size = 1
+        batch_size = self.args.batch_size
+        prev_tokens = Variable(tt.LongTensor(batch_size).fill_(0))
+        prev_probs = Variable(tt.FloatTensor(batch_size, 1).fill_(0))
+        prev_hidden = init_state
+        finished = [[] for _ in range(batch_size)]
+        result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[])
+                for _ in range(beam_size)] for _ in range(batch_size)]
+        batch_finished = [False for _ in range(batch_size)]
+
+        prev_masked_memory = masked_memory.expand_by_beam(beam_size)
+
+        attn_list = []
+        bp = 1
+        can_stop = True
+        # Restart work from here
+
+
+        rollouts.insert(finished, (prev_tokens, prev_hidden, masked_memory, attn_list), torch.zeros(batch_size),
+                            torch.zeros(batch_size,1),  torch.zeros(batch_size,1),  torch.zeros(batch_size,1), torch.ones(batch_size,1), torch.ones(batch_size,1))
         
-        return experience
+        for step in range(max_rollout_length):
+            print(step)
+            #prev_masked_memory if step > 0 else memory
+            # Make sure there will be no mismatch again when reproducing this stuff
+            
+            with torch.no_grad():
+                #finished, recurrent_hidden_states, value, action, action_log_prob, bp
+                #finished, value, action_log_probs, rnn_hxs, bp , dist_entropy, batch_finished, prev_probs, result = agent.act(
+                #    rollouts.obs[step], rollouts.recurrent_hidden_states[step],
+                #    batch_finished, bp, prev_probs, result)
+
+                action_log_probs, dist_entropy,  value, prev_tokens, prev_hidden, prev_masked_memory, \
+                masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished = agent.act2(prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished)
+
+            if can_stop: #bp==1:
+                break
+
+            masks = torch.FloatTensor(
+                [[1.0] if done_ else [0.0] for done_ in batch_finished])
+            bad_masks = masks
+
+            rnn_hxs = prev_tokens, prev_hidden, prev_masked_memory, attn_list
+
+
+            reward = torch.zeros(batch_size,1)
+
+            rollouts.insert(finished, rnn_hxs, prev_tokens,
+                            action_log_probs, value, reward, masks, bad_masks)
+
+
+        
+        sequences = beam_search.beam_search(
+            self.args.batch_size,
+            init_state,
+            memory,
+            agent.model.model.model.decoder.decode_token,
+            1,
+            cuda=self.args.cuda,
+            max_decoder_length=max_rollout_length,
+            return_beam_search_result=True,
+            volatile=False,
+            differentiable=True
+        )
+        breakpoint
+
+        orig_examples = state[-1]
+
+        output_code = self.model.model.decoder.postprocess_output([[x.sequence for x in y] for y in finished], memory)
+        rewards = []
+        for logit_beam, code_beam, example in zip(sequences, output_code, orig_examples):
+            for i, (logits, code) in enumerate(zip(logit_beam, code_beam)):
+                code = list(map(self.vocab.itos, code))
+                run_cases = lambda tests: executor.evaluate_code(code, example.schema.args, tests,
+                                                                 self.model.executor.execute)
+                input_tests = run_cases(example.input_tests)
+                reward = input_tests['correct'] / input_tests['total']
+                if self.args.use_held_out_test_for_rl:
+                    held_out_test = run_cases(example.tests)
+                    reward += held_out_test['correct']  # worth as much as all the other ones combined
+
+                rewards.append(reward)
+        
+        indicies= torch.max(rollouts.masks)[1]
+
+        rewards = torch.tensor(rewards)
+
+        if all_logits.is_cuda:
+            rewards = rewards.cuda()
+        
+        return rollouts
 
     def step(self, action):
 
@@ -405,19 +529,288 @@ class KarelEditPolicy(nn.Module):
 
         return logits, labels, torch.cat((io_embed.mean(dim=1),ref_code_memory.state[0].view(code_seqs.size(0),-1)),1), reward
 
+    def prepare_state(self, states):
+        input_grids, output_grids, code_seqs, \
+            dec_data, ref_code, ref_trace_grids,\
+                ref_trace_events, cag_interleave, orig_examples = states
+
+        if self.args.cuda:
+            input_grids = input_grids.cuda(async=True)
+            output_grids = output_grids.cuda(async=True)
+            code_seqs = karel_model.maybe_cuda(code_seqs, async=True)
+            dec_data = karel_model.maybe_cuda(dec_data, async=True)
+            ref_code = karel_model.maybe_cuda(ref_code, async=True)
+            ref_trace_grids = karel_model.maybe_cuda(ref_trace_grids, async=True)
+            ref_trace_events = karel_model.maybe_cuda(ref_trace_events, async=True)
+
+        io_embed = self.encode(input_grids, output_grids)
+        # code_seq = ground thruth code, ref_code.ps.data = edited
+
+        ref_code_memory = self.encode_code(ref_code, input_grids, output_grids, ref_trace_grids, ref_trace_events)
+
+        ref_trace_memory = self.encode_trace( ref_code_memory, ref_trace_grids, ref_trace_events, cag_interleave)
+
+        init_state = self.model.model.decoder.init_state(
+            ref_code_memory, ref_trace_memory,
+            io_embed.shape[0], io_embed.shape[1])
+        memory = self.model.model.decoder.prepare_memory(io_embed, ref_code_memory,
+                                                   ref_trace_memory, ref_code)
+        
+        return init_state, memory
+
 class KarelAgent(object):
 
     def __init__(self, env, args):
         self.vocab = env.vocab
         self.model = KarelEditPolicy(args)
         self.criterion = nn.MSELoss()
+        self.args =args
         if args.optimizer == 'sgd':
             self.optimizer = optim.SGD(self.model.model.model.parameters(), lr=args.lr)
         elif args.optimizer == 'adam':
             self.optimizer = optim.Adam(self.model.model.model.parameters(), lr=args.lr)
         else:
             self.optimizer = RAdam(self.model.model.model.parameters(), lr=args.lr, eps=1e-10, weight_decay=0.001)
-        self.critic = nn.Linear(512*3, 1, bias=False).cuda() if args.cuda else nn.Linear(512*3, 1, bias=False)
+        self.critic = nn.Linear(256, 1, bias=False).cuda() if args.cuda else nn.Linear(256, 1, bias=False)
+        self.dist = Categorical()
+
+    def act(self, inputs, rnn_hxs, batch_finished, bp, prev_probs, result):
+
+        finished, value, action_log_probs, actor_features, rnn_hxs, bp, batch_finished, prev_probs, result = self.base(inputs, rnn_hxs, batch_finished, bp, prev_probs, result)
+        dist = self.dist(actor_features)
+
+        action = rnn_hxs[0]
+        action_log_probs = dist.log_probs(action)
+
+        dist_entropy = dist.entropy().mean()
+
+        return finished, value, action_log_probs, rnn_hxs, bp , dist_entropy, batch_finished, prev_probs, result
+
+    def act2(self, prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished):
+        log_probs, actor_features, value, prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished = self.base2(
+            prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished)
+        dist = self.dist(actor_features)
+
+        action = prev_tokens
+        action_log_probs = dist.log_probs(action)
+
+        dist_entropy = dist.entropy().mean()
+
+        return action_log_probs, dist_entropy,  value, prev_tokens, prev_hidden, prev_masked_memory, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished 
+
+
+    def evaluate_actions(self, inputs, rnn_hxs, masks, action, prev_hidden):
+
+        # modify base such that you input a new prev_hidden that you keep updating while the rest of the inputs from rnn_hxs and inputs comes from storage
+
+        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
+        dist = self.dist(actor_features)
+
+        action_log_probs = dist.log_probs(action)
+        dist_entropy = dist.entropy().mean()
+
+        return value, action_log_probs, dist_entropy, rnn_hxs
+
+    def base2(self, prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished):
+                
+                
+        hidden, logits, dec_output = self.model.model.model.decoder.decode_token(prev_tokens, prev_hidden, prev_masked_memory if step > 0 else
+                        masked_memory, attn_list, return_dec_out=True)
+
+
+        batch_size = self.args.batch_size
+        beam_size = 1
+
+        logit_size = logits.size(1)
+        # log_probs: batch size x beam size x vocab size
+        log_probs = F.log_softmax(logits, dim=-1).view(batch_size, -1, logit_size)
+        total_log_probs = log_probs + prev_probs.unsqueeze(2)
+        # log_probs_flat: batch size x beam_size * vocab_size
+        log_probs_flat = total_log_probs.view(batch_size, -1)
+        # indices: batch size x beam size
+        # Each entry is in [0, beam_size * vocab_size)
+        actual_beam_size = min(beam_size, log_probs_flat.size(1))
+        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
+        # prev_tokens: batch_size * beam size
+        # Each entry indicates which token should be added to each beam.
+        prev_tokens = (indices % logit_size).view(-1)
+        # This takes a lot of time... about 50% of the whole thing.
+        indices = indices.cpu()
+        # k_idx: batch size x beam size
+        # Each entry is in [0, beam_size), indicating which beam to extend.
+        k_idx = (indices / logit_size)
+
+        if beam_size == actual_beam_size:
+            b_idx_to_use = Variable(torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1))
+        else:
+            b_idx_to_use = Variable(
+                torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, actual_beam_size).view(-1))
+
+        idx = torch.stack([b_idx_to_use, k_idx.view(-1)])
+        # prev_hidden: (batch size * beam size) x hidden size
+        # Contains the hidden states which produced the top-k (k = beam size)
+        # tokens, and should be extended in the step.
+        prev_hidden = hidden.select_for_beams(batch_size, idx)
+
+        prev_result = result
+        result = [[] for _ in range(batch_size)]
+        can_stop = True
+        prev_probs_np = prev_probs.data.cpu().numpy()
+        log_probs_np = log_probs.data.cpu().numpy()
+        k_idx = k_idx.data.numpy()
+        indices = indices.data.numpy()
+        for batch_id in range(batch_size):
+            if batch_finished[batch_id]:
+                continue
+            # print(step, finished[batch_id])
+            if len(finished[batch_id]) >= beam_size:
+                # If last in finished has bigger log prob then best in topk, stop.
+                if finished[batch_id][-1].total_log_prob > prev_probs_np[batch_id, 0]:
+                    batch_finished[batch_id] = True
+                    continue
+            for idx in range(actual_beam_size):
+                token = indices[batch_id, idx] % logit_size
+                kidx = k_idx[batch_id, idx]
+                # print(step, batch_id, idx, 'token', token, kidx, 'prev', prev_result[batch_id][kidx], prev_probs.data[batch_id][idx])
+                if token == 1:  # 1 == </S>
+                    finished[batch_id].append(BeamSearchResult(
+                        sequence=prev_result[batch_id][kidx].sequence,
+                        total_log_prob=prev_probs_np[batch_id, idx],
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=None))
+                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[]))
+                    prev_probs.data[batch_id][idx] = float('-inf')
+                else:
+                    result[batch_id].append(BeamSearchResult(
+                        sequence=prev_result[batch_id][kidx].sequence + [token],
+                        total_log_prob=prev_probs_np[batch_id, idx],
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=None))
+                    can_stop = False
+            if len(finished[batch_id]) >= beam_size:
+                # Sort and clip.
+                finished[batch_id] = sorted(
+                    finished[batch_id], key=lambda x: -x.total_log_prob)[:beam_size]
+        #if can_stop:
+            #break
+
+        for batch_id in range(batch_size):
+            # If there is deficit in finished, fill it in with highest probable results.
+            if len(finished[batch_id]) < beam_size:
+                i = 0
+                while i < beam_size and len(finished[batch_id]) < beam_size:
+                    if result[batch_id][i]:
+                        finished[batch_id].append(result[batch_id][i])
+                    i += 1
+
+        value = self.critic(dec_output)
+
+        # make max value
+        min_val = torch.FloatTensor([-100]).cuda() if self.args.cuda else torch.FloatTensor([-100]) 
+        log_probs = torch.max(log_probs,min_val)
+    
+        return log_probs, dec_output, value, prev_tokens, prev_hidden, prev_masked_memory, step, masked_memory, attn_list, result, prev_probs, can_stop, finished, batch_finished
+
+
+    def base(self, finished, rnn_hxs, batch_finished, bp, prev_probs, result):
+
+        prev_tokens, prev_hidden, prev_masked_memory, attn_list = rnn_hxs
+
+        hidden, logits, dec_output = self.model.model.model.decoder.decode_token(prev_tokens, prev_hidden, prev_masked_memory, attn_list, return_dec_out=True)
+        batch_size = self.args.batch_size
+        beam_size=1
+
+        logit_size = logits.size(1)
+        # log_probs: batch size x beam size x vocab size
+        log_probs = F.log_softmax(logits, dim=-1).view(batch_size, -1, logit_size)
+        total_log_probs = log_probs + prev_probs.unsqueeze(2)
+        # log_probs_flat: batch size x beam_size * vocab_size
+        log_probs_flat = total_log_probs.view(batch_size, -1)
+        # indices: batch size x beam size
+        # Each entry is in [0, beam_size * vocab_size)
+        actual_beam_size = min(beam_size, log_probs_flat.size(1))
+        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
+        # prev_tokens: batch_size * beam size
+        # Each entry indicates which token should be added to each beam.
+        prev_tokens = (indices % logit_size).view(-1)
+        # This takes a lot of time... about 50% of the whole thing.
+        indices = indices.cpu()
+        # k_idx: batch size x beam size
+        # Each entry is in [0, beam_size), indicating which beam to extend.
+        k_idx = (indices / logit_size)
+
+        if beam_size == actual_beam_size:
+            b_idx_to_use = Variable(torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1))
+        else:
+            b_idx_to_use = Variable(
+                torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, actual_beam_size).view(-1))
+
+        idx = torch.stack([b_idx_to_use, k_idx.view(-1)])
+        # prev_hidden: (batch size * beam size) x hidden size
+        # Contains the hidden states which produced the top-k (k = beam size)
+        # tokens, and should be extended in the step.
+        prev_hidden = hidden.select_for_beams(batch_size, idx)
+
+        bp=1
+        prev_result = result
+        result = [[] for _ in range(batch_size)]
+        prev_probs_np = prev_probs.data.cpu().numpy()
+        log_probs_np = log_probs.data.cpu().numpy()
+        k_idx = k_idx.data.numpy()
+        indices = indices.data.numpy()
+        for batch_id in range(batch_size):
+            if batch_finished[batch_id]:
+                continue
+            # print(step, finished[batch_id])
+            if len(finished[batch_id]) >= beam_size:
+                # If last in finished has bigger log prob then best in topk, stop.
+                if finished[batch_id][-1].total_log_prob > prev_probs_np[batch_id, 0]:
+                    batch_finished[batch_id] = True
+                    continue
+            for idx in range(actual_beam_size):
+                token = indices[batch_id, idx] % logit_size
+                kidx = k_idx[batch_id, idx]
+                # print(step, batch_id, idx, 'token', token, kidx, 'prev', prev_result[batch_id][kidx], prev_probs.data[batch_id][idx])
+                if token == 1:  # 1 == </S>
+
+                    finished[batch_id].append(BeamSearchResult(
+                        sequence=prev_result[batch_id][kidx].sequence,
+                        total_log_prob=prev_probs_np[batch_id, idx],
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=None))
+                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[]))
+                    prev_probs.data[batch_id][idx] = float('-inf')
+                else:
+                    result[batch_id].append(BeamSearchResult(
+                        sequence=prev_result[batch_id][kidx].sequence + [token],
+                        total_log_prob=prev_probs_np[batch_id, idx],
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
+                        log_probs_torch=None))
+                    bp = 0
+            if len(finished[batch_id]) >= beam_size:
+                # Sort and clip.
+                finished[batch_id] = sorted(
+                    finished[batch_id], key=lambda x: -x.total_log_prob)[:beam_size]
+
+        for batch_id in range(batch_size):
+            # If there is deficit in finished, fill it in with highest probable results.
+            if len(finished[batch_id]) < beam_size:
+                i = 0
+                while i < beam_size and len(finished[batch_id]) < beam_size:
+                    if result[batch_id][i]:
+                        finished[batch_id].append(result[batch_id][i])
+                    i += 1
+
+            
+        value = self.critic(dec_output)
+
+        # make max value
+        min_val = torch.FloatTensor([-100]).cuda() if self.args.cuda else torch.FloatTensor([-100]) 
+        log_probs = torch.max(log_probs,min_val)
+
+
+        return finished, value, log_probs, dec_output, (prev_tokens, prev_hidden, prev_masked_memory, attn_list), bp, batch_finished, prev_probs, result
+
 
     def select_action(self, state, return_true_code=False ):
         # labels: correct edit operations
@@ -441,26 +834,6 @@ class KarelAgent(object):
         else:
             return labels, probs, [], values, reward
 
-class ReplayBuffer(object):
-
-    def __init__(self, max_size, erase_factor):
-        self.max_size = max_size
-        self.erase_factor = erase_factor
-        self.buffer = []
-
-    @property
-    def size(self):
-        return len(self.buffer)
-
-    def add(self, experience):
-        self.buffer.extend(experience)
-        if len(self.buffer) >= self.max_size:
-            self.buffer = self.buffer[int(self.erase_factor * self.size):]
-
-    def sample(self, size):
-        replace_mode = size > len(self.buffer)
-        index = np.random.choice(self.size, size=size, replace=replace_mode)
-        return [self.buffer[idx] for idx in index]
 
 
 def print_stats(epoch, i, loss, errors, cum_reward):
@@ -485,20 +858,6 @@ class PolicyTrainer(object):
 
     def load_pretrained(self, model_dir, map_to_cpu, step):
         self.step = saver.load_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, model_dir, map_to_cpu, step)
-
-    def train_actor_critic(self, batch):
-        states = self.env.prepare_states([ex.state for ex in batch])
-        new_states = self.env.prepare_states([ex.new_state for ex in batch])
-        actions = self.env.prepare_actions([ex.action for ex in batch])
-        targets = np.zeros(len(batch))
-        # prepare_batch(batch)
-        value = self.critic.action_value(states)
-        new_value, _ = self.actor_critic.best_action_value(new_states)
-        for idx, ex in enumerate(batch):
-            Q_s_a = value[idx][ex.action]
-            new_Q_s_a = 0 if ex.reward == 0 else (ex.reward + DISCOUNT * new_value[idx])
-            targets[idx] = Q_s_a + ALPHA * (new_Q_s_a - Q_s_a)
-        self.critic.train(tasks, states, actions, targets)
 
     def batchify(self, values, action_log_probs, adv_targ, _, lengths):
 
@@ -768,19 +1127,35 @@ class PolicyTrainer(object):
             #self.load_pretrained('/zhome/3f/6/108837/trained_models/trained_models/vanilla,trace_enc==none,batch_size==64,lr==1,lr_decay_steps=100000/',True, int(1769300)) #self.args.cuda
         #    self.load_pretrained('/zhome/3f/6/108837/program_synthesis/program_synthesis/models/1587190775lr001_dcs10000_sgd_roll3/',True, int(20000000)) #self.args.cuda
 
-        writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
-        #replay_buffer = ReplayBuffer(int(self.args.replay_buffer_size), self.args.erase_factor)
+        #writer = TensorBoardRLWrite(self.args.model_dir, '_test1')
+        agent = PPO(
+            self.actor_critic,
+            self.args.clip_param,
+            self.args.ppo_steps,
+            self.args.batch_size,
+            self.args.value_loss_coef,
+            self.args.entropy_coef,
+            max_grad_norm=self.args.max_grad_norm)
         errors = 0
         runner = 0
         cum_reward = 0
         for epoch in range(self.args.num_epochs):
             for i, batch in enumerate(self.env.dataset_loader):
+                rollouts = RolloutStorage(self.args.max_rollout_length, self.args.batch_size)
                 with torch.no_grad():
-                    try:
-                        experience = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length)
-                    except IndexError:
-                        errors+=1
-                        continue
+                    rollouts = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length, rollouts)
+                
+                next_value = actor_critic.get_value(
+                    rollouts.obs[-1], rollouts.recurrent_hidden_states[-1],
+                    rollouts.masks[-1]).detach()
+                
+                rollouts.compute_returns(next_value, args.use_gae, args.gamma,
+                                 args.gae_lambda, args.use_proper_time_limits)
+
+                value_loss, action_loss, dist_entropy = agent.update(rollouts)
+
+                            
+                
                 runner+=1*self.args.batch_size
                 loss = self.Program_PPO_update(experience)
                 cum_reward += loss[3]

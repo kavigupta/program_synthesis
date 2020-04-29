@@ -1491,7 +1491,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         return logits, labels, dec_output, (dec_data.output.ps.batch_sizes, dec_data.output.orig_to_sort)#dec_data.output.lengths
 
     def decode_token(self, token, state, memory, attentions, batch_order=None,
-            use_end_mask=True):
+            use_end_mask=True, return_dec_out=False):
         pairs_per_example  = memory.io.shape[1]
         token_np = token.data.cpu().numpy()
         new_finished = state.finished.copy()
@@ -1616,7 +1616,11 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                     end_mask.append(0)
             logits.data.masked_fill_(self.end_mask[end_mask], float('-inf'))
 
-        return LGRLRefineEditDecoderState(new_source_locs, new_finished,
+        if return_dec_out:
+            return LGRLRefineEditDecoderState(new_source_locs, new_finished,
+                new_context, *new_state), logits, dec_output
+        else:
+            return LGRLRefineEditDecoderState(new_source_locs, new_finished,
                 new_context, *new_state), logits
 
     def postprocess_output(self, sequences, memory):
