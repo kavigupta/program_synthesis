@@ -154,8 +154,7 @@ class RolloutStorage(object):
             "to be greater than or equal to the number of "
             "PPO mini batches ({}).".format(num_processes, num_mini_batch))
         num_envs_per_batch = num_processes // num_mini_batch
-        print(num_envs_per_batch)
-        print(num_processes)
+
         for start_ind in range(0, num_processes, num_envs_per_batch):
 
             self.num_steps = 1
@@ -175,8 +174,6 @@ class RolloutStorage(object):
             old_action_log_probs_batch = self.action_log_probs[1:self.num_steps+1]
             adv_targ = advantages[1:self.num_steps+1]
 
-            print(self.value_preds[1:self.num_steps+2])
-
             # make sure to extract correct items from the storage to compare with new computations
             T, N = self.num_steps, num_processes
             # These are all tensors of size (T, N, -1)
@@ -187,7 +184,9 @@ class RolloutStorage(object):
 
             # Flatten the (T, N, ...) tensors to (T * N, ...)
             #obs_batch = _flatten_helper(T, N, obs_batch)
-            actions_batch = _flatten_helper(T, N, actions_batch)
+
+            #actions_batch = _flatten_helper(T, N, actions_batch)
+            print(value_preds_batch)
             value_preds_batch = _flatten_helper(T, N, value_preds_batch)
             return_batch = _flatten_helper(T, N, return_batch)
             #masks_batch = _flatten_helper(T, N, masks_batch)
@@ -222,7 +221,7 @@ class PPO():
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
 
-    def update(self, rollouts):
+    def update(self, rollouts, state):
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
         advantages = (advantages - advantages.mean()) / (
             advantages.std() + 1e-5)
@@ -244,7 +243,11 @@ class PPO():
                 # Reshape to do in a single forward pass for all steps
                 values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
-                    actions_batch)
+                    actions_batch, self.actor_critic.model.prepare_state(state)[0])
+
+                print(values.shape)
+                print(value_preds_batch.shape)
+                breakpoint
 
                 ratio = torch.exp(action_log_probs -
                                   old_action_log_probs_batch)
@@ -348,7 +351,7 @@ class KarelEditEnv(object):
 
             reward = torch.zeros(batch_size,1)
 
-            rollouts.insert(finished, rnn_hxs, prev_tokens,
+            rollouts.insert(finished, rnn_hxs, rnn_hxs[0],
                             action_log_probs, value, reward, masks, bad_masks)
 
 
@@ -564,20 +567,53 @@ class KarelAgent(object):
 
         return finished, value, action_log_probs, rnn_hxs, bp , dist_entropy, batch_finished, prev_probs, result
 
-    def evaluate_actions(self, inputs, rnn_hxs, masks, action, prev_hidden):
+    def evaluate_actions(self, inputs, rnn_hxs_storage, batch_finished, actions, prev_hidden):
 
         # modify base such that you input a new prev_hidden that you keep updating while the rest of the inputs from rnn_hxs and inputs comes from storage
 
-        value, actor_features, rnn_hxs = self.base(inputs, rnn_hxs, masks)
-        dist = self.dist(actor_features)
+        tt = torch.cuda if self.args.cuda else torch
+        beam_size = 1
+        batch_size = self.args.batch_size
+        prev_tokens = Variable(tt.LongTensor(batch_size).fill_(0))
+        prev_probs = Variable(tt.FloatTensor(batch_size, 1).fill_(0))
+        finished = [[] for _ in range(batch_size)]
+        result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[])
+                for _ in range(beam_size)] for _ in range(batch_size)]
+        # Check if we need to use our mask instead of batch_finished
+        batch_finished = [False for _ in range(batch_size)]
 
-        action_log_probs = dist.log_probs(action)
-        dist_entropy = dist.entropy().mean()
+        bp = 1
 
-        return value, action_log_probs, dist_entropy, rnn_hxs
+        action_log_prob_list = []
+        value_list = []
+        dist_entropy_list = []
+        for step, action in enumerate(actions):
 
-    def base(self, finished, rnn_hxs, batch_finished, bp, prev_probs, result):
+
+            finished, value, action_log_probs, actor_features, rnn_hxs_computed, _, batch_finished, prev_probs, result = self.base(finished, rnn_hxs_storage[step], batch_finished, bp, prev_probs, result, None)
+            
+            value_list.append(value)
+            
+            dist = self.dist(actor_features)
+            action_log_prob = dist.log_probs(action.cuda() if self.args.cuda else action)
+            action_log_prob_list.append(action_log_prob)
+
+            dist_entropy = dist.entropy()
+            dist_entropy_list.append(dist_entropy)
+
+            prev_hidden = rnn_hxs_computed[1]
+
+        action_log_prob_list = torch.cat(action_log_prob_list)
+        dist_entropy_list = torch.cat(dist_entropy_list).mean()
+        value_list = torch.cat(value_list)
+
+        return value_list, action_log_prob_list, dist_entropy_list, []
+
+    def base(self, finished, rnn_hxs, batch_finished, bp, prev_probs, result, prev_hidden_=None):
         prev_tokens, prev_hidden, prev_masked_memory, attn_list = rnn_hxs
+
+        if prev_hidden_ != None:
+            prev_hidden = prev_hidden_
 
         hidden, logits, dec_output = self.model.model.model.decoder.decode_token(prev_tokens, prev_hidden, prev_masked_memory, attn_list, return_dec_out=True)
         batch_size = self.args.batch_size
@@ -1001,9 +1037,9 @@ class PolicyTrainer(object):
                 
                 rollouts.compute_returns(next_value, True, 0.99, 0.95)
 
-                value_loss, action_loss, dist_entropy = agent.update(rollouts)
+                value_loss, action_loss, dist_entropy = agent.update(rollouts, batch)
 
-                            
+                breakpoint
                 
                 runner+=1*self.args.batch_size
                 loss = self.Program_PPO_update(experience)
