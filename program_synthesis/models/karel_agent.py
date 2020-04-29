@@ -165,9 +165,9 @@ class RolloutStorage(object):
             
             #for offset in range(num_envs_per_batch):
             #    ind = perm[start_ind + offset]
-            obs_batch = self.obs[1:self.num_steps+1]
-            recurrent_hidden_states_batch = self.recurrent_hidden_states[1:self.num_steps+1]
-            actions_batch = self.actions[1:self.num_steps+1]
+            obs_batch = self.obs[:self.num_steps+1]
+            recurrent_hidden_states_batch = self.recurrent_hidden_states[:self.num_steps+1]
+            actions_batch = self.actions[:self.num_steps+1]
             value_preds_batch = self.value_preds[1:self.num_steps+1]
             return_batch = self.returns[1:self.num_steps+1]
             masks_batch = self.masks[1:self.num_steps+1]
@@ -186,7 +186,6 @@ class RolloutStorage(object):
             #obs_batch = _flatten_helper(T, N, obs_batch)
 
             #actions_batch = _flatten_helper(T, N, actions_batch)
-            print(value_preds_batch)
             value_preds_batch = _flatten_helper(T, N, value_preds_batch)
             return_batch = _flatten_helper(T, N, return_batch)
             #masks_batch = _flatten_helper(T, N, masks_batch)
@@ -245,8 +244,8 @@ class PPO():
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
                     actions_batch, self.actor_critic.model.prepare_state(state)[0])
 
-                print(values.shape)
-                print(value_preds_batch.shape)
+                print(values)
+                print(value_preds_batch)
                 breakpoint
 
                 ratio = torch.exp(action_log_probs -
@@ -590,8 +589,8 @@ class KarelAgent(object):
         for step, action in enumerate(actions):
 
 
-            finished, value, action_log_probs, actor_features, rnn_hxs_computed, _, batch_finished, prev_probs, result = self.base(finished, rnn_hxs_storage[step], batch_finished, bp, prev_probs, result, None)
-            
+            _, value, action_log_probs, actor_features, rnn_hxs_computed, _, batch_finished, prev_probs, result = self.base(finished, rnn_hxs_storage[step], batch_finished, bp, prev_probs, result, prev_hidden)
+
             value_list.append(value)
             
             dist = self.dist(actor_features)
@@ -603,9 +602,9 @@ class KarelAgent(object):
 
             prev_hidden = rnn_hxs_computed[1]
 
-        action_log_prob_list = torch.cat(action_log_prob_list)
-        dist_entropy_list = torch.cat(dist_entropy_list).mean()
-        value_list = torch.cat(value_list)
+        action_log_prob_list = torch.cat(action_log_prob_list[:-1])
+        dist_entropy_list = torch.cat(dist_entropy_list[:-1]).mean()
+        value_list = torch.cat(value_list[:-1])
 
         return value_list, action_log_prob_list, dist_entropy_list, []
 
