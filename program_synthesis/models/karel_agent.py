@@ -125,7 +125,7 @@ class RolloutStorage(object):
         self.recurrent_hidden_states[0].copy_(self.recurrent_hidden_states[-1])
         self.masks[0].copy_(self.masks[-1])
         self.bad_masks[0].copy_(self.bad_masks[-1])
-
+    # Check if this is okay with respect to the reward
     def compute_returns(self,
                         next_value,
                         use_gae,
@@ -206,7 +206,8 @@ class PPO():
                  value_loss_coef,
                  entropy_coef,
                  max_grad_norm=None,
-                 use_clipped_value_loss=True):
+                 use_clipped_value_loss=True,
+                 on_cuda = True):
 
         self.actor_critic = actor_critic
 
@@ -219,6 +220,7 @@ class PPO():
 
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+        self.on_cuda = on_cuda
 
     def update(self, rollouts, state):
         advantages = rollouts.returns[:-1] - rollouts.value_preds[:-1]
@@ -243,10 +245,12 @@ class PPO():
                 values, action_log_probs, dist_entropy, _ = self.actor_critic.evaluate_actions(
                     obs_batch, recurrent_hidden_states_batch, masks_batch,
                     actions_batch, self.actor_critic.model.prepare_state(state)[0])
-
-                print(values)
-                print(value_preds_batch)
-                breakpoint
+                
+                if self.on_cuda:
+                    old_action_log_probs_batch = old_action_log_probs_batch.cuda()
+                    value_preds_batch = value_preds_batch.cuda()
+                    adv_targ = adv_targ.cuda()
+                    return_batch = return_batch.cuda()
 
                 ratio = torch.exp(action_log_probs -
                                   old_action_log_probs_batch)
@@ -266,19 +270,19 @@ class PPO():
                 else:
                     value_loss = 0.5 * (return_batch - values).pow(2).mean()
 
-                self.optimizer.zero_grad()
+                self.actor_critic.optimizer.zero_grad()
                 (value_loss * self.value_loss_coef + action_loss -
                  dist_entropy * self.entropy_coef).backward()
-                nn.utils.clip_grad_norm_(self.actor_critic.parameters(),
+                nn.utils.clip_grad_norm_(self.actor_critic.model.parameters(),
                                          self.max_grad_norm)
-                self.optimizer.step()
+                self.actor_critic.optimizer.step()
 
                 value_loss_epoch += value_loss.item()
                 action_loss_epoch += action_loss.item()
                 dist_entropy_epoch += dist_entropy.item()
 
         num_updates = self.ppo_epoch * self.num_mini_batch
-        breakpoint
+
         value_loss_epoch /= num_updates
         action_loss_epoch /= num_updates
         dist_entropy_epoch /= num_updates
@@ -723,14 +727,13 @@ class KarelAgent(object):
 
 
 
-def print_stats(epoch, i, loss, errors, cum_reward):
+def print_stats(epoch, i, loss1, loss2, loss3, reward, cum_reward):
     print('epoch {}'.format(epoch))
     print('i {}'.format(i))
-    print('training/action_loss {}'.format(loss[0]))
-    print('training/value_loss {}'.format(loss[1]))
-    print('training/entropy {}'.format(loss[2]))
-    print('training/reward {}'.format(loss[3]))
-    print('errors {}'.format(errors))
+    print('training/action_loss {}'.format(loss1))
+    print('training/value_loss {}'.format(loss2))
+    print('training/entropy {}'.format(loss3))
+    print('training/reward {}'.format(reward))
     print('training/cummulative_reward {}'.format(cum_reward))
 
 class PolicyTrainer(object):
@@ -1022,7 +1025,8 @@ class PolicyTrainer(object):
             1,
             self.args.value_loss_coef,
             self.args.entropy_coef,
-            max_grad_norm=self.args.max_grad_norm)
+            max_grad_norm=self.args.max_grad_norm,
+            on_cuda = self.args.cuda)
         errors = 0
         runner = 0
         cum_reward = 0
@@ -1037,13 +1041,11 @@ class PolicyTrainer(object):
                 rollouts.compute_returns(next_value, True, 0.99, 0.95)
 
                 value_loss, action_loss, dist_entropy = agent.update(rollouts, batch)
-
-                breakpoint
-                
-                runner+=1*self.args.batch_size
-                loss = self.Program_PPO_update(experience)
-                cum_reward += loss[3]
-                print_stats(epoch, i, loss, errors,cum_reward)
+                                
+                #runner+=1*self.args.batch_size
+                #loss = self.Program_PPO_update(experience)
+                cum_reward += rollouts.rewards.sum()/self.args.batch_size
+                print_stats(epoch, i, value_loss, action_loss, dist_entropy, rollouts.rewards.sum()/self.args.batch_size ,cum_reward)
                 
                 #writer.add(runner,'training/action_loss', loss[0])
                 #writer.add(runner,'training/value_loss', loss[1])
