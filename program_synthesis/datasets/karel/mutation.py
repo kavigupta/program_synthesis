@@ -362,7 +362,7 @@ class KarelOutputRefExampleMutator(object):
         self.ref_code = ref_code
 
     @classmethod
-    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False):
+    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False, balancing='equal-count'):
         """
         Get a mutator from the given file.
 
@@ -375,7 +375,11 @@ class KarelOutputRefExampleMutator(object):
                     ensure an equal number pass the held out test or not.
             for_eval: whether the given dataset will be used for evaluation or not. If so, do not require a 50/50 split
                 in some cases
+            balancing: if 'equal-count', balances equally when for_eval is False, if 'none' does not.
         """
+
+        assert balancing in ('equal-count', 'none')
+
         if karel_ref_file_train is None:
             return None
 
@@ -409,7 +413,7 @@ class KarelOutputRefExampleMutator(object):
         }[mode]
 
         to_be_used_idx = [i for i, x in enumerate(examples) if i in valid_indices and can_be_used(x)]
-        if mode == 'overfit-check' and not for_eval:
+        if mode == 'overfit-check' and not for_eval and balancing == 'equal-count':
             to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
 
         negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
