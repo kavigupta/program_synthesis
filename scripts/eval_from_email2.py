@@ -79,7 +79,10 @@ def already_executed(output_path):
     done = False
     if os.path.exists(output_path):
         with open(output_path) as f:
-            res = json.loads(next(f))
+            try:
+                res = json.loads(next(f))
+            except StopIteration:
+                return False
         if res.get('done', res.get('total', 0) >= 2500):
             done = True
     return done
