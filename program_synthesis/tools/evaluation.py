@@ -170,6 +170,8 @@ def run_predict(dataset, inference, do_execute, inference_output_path, evaluate_
             prediction = dict(
                 output=res.info['candidates'][0],
                 beams=res.info['candidates'],
+                beams_correct=[executor.evaluate_code(hypothesis, example.schema.args, tests, do_execute) for hypothesis
+                               in res.info['candidates']],
                 is_correct=stats['correct'] == stats['total'],
                 individual=stats['individual']
             )
