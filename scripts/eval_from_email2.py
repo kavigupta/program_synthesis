@@ -13,6 +13,12 @@ def valid_checkpoints():
     for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
+        if "many-mutations" in logdir:
+            continue
+        if "finetuned-rl-1e-5," in logdir:
+            continue
+        if "finetuned-rl-1e-5-use-heldout," in logdir:
+            continue
         numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
@@ -25,7 +31,8 @@ def valid_checkpoints():
                 continue
             ckpt_number = int(ckpt[-8:])
             cm100 = ckpt_number - 100
-            if (cm100 % 50000 != 0 and cm100 % 10000 == 0) or ckpt_number < 1000:
+            cm1000 = ckpt_number - 1000
+            if (cm100 % 25000 != 0 and cm1000 % 25000 != 0) or ckpt_number < 1000:
                 continue
             numbers.append(ckpt_number)
         numbers.sort(reverse=True)
@@ -46,15 +53,18 @@ def valid_modes_and_params():
                     for strategy in 'greedy', 'best_first':
                         when = 'always' if strategy == 'best_first' else 'sometimes'
                         for extra in '', '--iterative-search-start-with-beams':
-                            if not (extra == '' or strategy == 'best_first'):
-                                continue
+                            if extra != '':
+                                if strategy != 'best_first':
+                                    continue
+                                if model == 'nearai':
+                                    continue
                             render_extra = '' if extra == '' else ',,start-with-beams'
                             for overfit_model, overfit_cmd in overfit_models_to_use():
                                 if overfit_model == '':
                                     render_extra_with = render_extra
                                     extra_with = extra
                                 else:
-                                    if strategy != 'best_first':
+                                    if strategy != 'best_first' or limit != 25 or model != "nearai32":
                                         continue
                                     render_extra_with = render_extra + ',,overfit=' + overfit_model
                                     extra_with = extra + " " + overfit_cmd
@@ -65,7 +75,7 @@ def valid_modes_and_params():
 def overfit_models_to_use():
     models = [
         (2000, "overfit-vanilla-slow-split"),
-        (2000, "overfit-aggregate-with-io-slow-split")
+        #(2000, "overfit-aggregate-with-io-slow-split")
     ]
     yield '', ''
     for step, model in models:
@@ -150,6 +160,8 @@ def main(args):
             else:
                 priority = 100
             if when == 'always':
+                priority -= 1
+            if "overfit=" in command:
                 priority -= 1
             by_priority.append((priority, command))
     by_priority.sort()
