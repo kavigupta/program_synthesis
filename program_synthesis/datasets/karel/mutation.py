@@ -362,7 +362,8 @@ class KarelOutputRefExampleMutator(object):
         self.ref_code = ref_code
 
     @classmethod
-    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False, balancing='equal-count'):
+    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False, balancing='equal-count',
+                  use_all_beams_individually=False):
         """
         Get a mutator from the given file.
 
@@ -380,6 +381,9 @@ class KarelOutputRefExampleMutator(object):
 
         assert balancing in ('equal-count', 'none')
 
+        if for_eval:
+            assert not use_all_beams_individually
+
         if karel_ref_file_train is None:
             return None
 
@@ -396,34 +400,52 @@ class KarelOutputRefExampleMutator(object):
 
         parser = KarelForSynthesisParser()
 
-        def is_valid_syntax(x):
+        def get_beams(example):
+            if use_all_beams_individually:
+                return example['beams']
+            return [example['output']]
+
+        def get_beams_results(example):
+            if use_all_beams_individually:
+                return [x['individual'] for x in example['beams_correct']]
+            return [example['individual']]
+
+        def is_valid_syntax(x, j):
             try:
-                parser.parse(tuple(x['output']), debug=False)
+                parser.parse(tuple(get_beams(x)[j]), debug=False)
             except KarelSyntaxError:
                 return False
             return True
 
-        def passes_given_tests(x):
-            return x['passes_given_tests']
+        def passes_given_tests(example, j):
+            results = get_beams_results(example)[j]
+            assert len(results) == 6
+            return all(results[:5])
+
+        def passes_held_out_test(example, j):
+            results = get_beams_results(example)[j]
+            assert len(results) == 6
+            return bool(results[-1])
 
         can_be_used = {
-            'debugger': lambda x: not passes_given_tests(x) and is_valid_syntax(x),
-            'overfit-check': lambda x: passes_given_tests(x) and is_valid_syntax(x),
+            'debugger': lambda x, j: not passes_given_tests(x, j) and is_valid_syntax(x, j),
+            'overfit-check': lambda x, j: passes_given_tests(x, j) and is_valid_syntax(x, j),
             'all': is_valid_syntax
         }[mode]
 
-        to_be_used_idx = [i for i, x in enumerate(examples) if i in valid_indices and can_be_used(x)]
+        to_be_used_idx = [(i, j) for i in range(len(examples)) for j in range(len(get_beams(examples[i]))) if
+                          i in valid_indices and can_be_used(examples[i], j)]
         if mode == 'overfit-check' and not for_eval and balancing == 'equal-count':
-            to_be_used_idx = equal_halves(to_be_used_idx, lambda x: examples[x]['is_correct'])
+            to_be_used_idx = equal_halves(to_be_used_idx, lambda ij: passes_held_out_test(examples[ij[0]], ij[1]))
 
-        negative_examples = [tuple(examples[i]['output']) for i in to_be_used_idx]
-        code_is_correct = [examples[i]['is_correct'] for i in to_be_used_idx]
+        negative_examples = [tuple(get_beams(examples[i])[j]) for i, j in to_be_used_idx]
+        code_is_correct = [passes_held_out_test(examples[i], j) for i, j in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
-        beams = [examples[i].get('beams', [examples[i]['output']]) for i in to_be_used_idx]
+        beams = [get_beams(examples[i]) for i, j in to_be_used_idx]
         return cls(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
-        return [index[i] for i in self.to_be_used_indices]
+        return [index[i] for i, j in self.to_be_used_indices]
 
     def __call__(self, idx, karel_example):
         assert self.ref_code[idx]
