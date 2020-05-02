@@ -22,7 +22,7 @@ def run_on_gpu(gpu, task):
 class TaskRunner:
     def __init__(self, tasks, *, max_memory, max_procs, command_line_replenish, errors_file):
         self.current_processes = {}
-        self.pbar = tqdm.tqdm(total=len(tasks))
+        self.pbar = tqdm.tqdm(total=len(tasks), dynamic_ncols=True)
         self.tasks = tasks[::-1]  # reverse to ensure we do the first task first when we run tasks.pop()
 
         self.max_memory = max_memory
@@ -74,7 +74,7 @@ class TaskRunner:
         finally:
             self.pbar.close()
             print("Terminating")
-            for _, _, _, proc in tqdm.tqdm(list(self.current_processes.values())):
+            for _, _, _, proc in tqdm.tqdm(list(self.current_processes.values()), dynamic_ncols=True):
                 proc.kill()
 
     def replenish_tasks(self):
