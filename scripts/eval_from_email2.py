@@ -153,17 +153,21 @@ def main(args):
                 priority -= 1
             by_priority.append((priority, command))
     by_priority.sort()
-    print("commands by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    print_classes(by_priority)
     assert args.max_commands is None or args.priority is None, "cannot specify both a maximal number of commands and a maximal priority"
     if args.max_commands is not None:
         by_priority = by_priority[:args.max_commands]
     elif args.priority is not None:
         by_priority = [(x, y) for x, y in by_priority if x <= args.priority]
-    print("commands to use by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    print_classes(by_priority)
 
     for _, command in by_priority:
         print(command)
 
+def print_classes(by_priority):
+    for clas, count in sorted(Counter(x for x, _ in by_priority).items()):
+        print(clas, count, file=sys.stderr)
+    print(file=sys.stderr)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-commands', type=int, default=None)
