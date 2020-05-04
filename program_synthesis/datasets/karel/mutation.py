@@ -435,9 +435,11 @@ class KarelOutputRefExampleMutator(object):
 
         to_be_used_idx = [(i, j) for i in range(len(examples)) for j in range(len(get_beams(examples[i]))) if
                           i in valid_indices and can_be_used(examples[i], j)]
+        print("number of examples pre-balancing", len(to_be_used_idx))
         if mode == 'overfit-check' and not for_eval and balancing == 'equal-count':
             to_be_used_idx = equal_halves(to_be_used_idx, lambda ij: passes_held_out_test(examples[ij[0]], ij[1]))
 
+        print("number of examples post-balancing", len(to_be_used_idx))
         negative_examples = [tuple(get_beams(examples[i])[j]) for i, j in to_be_used_idx]
         code_is_correct = [passes_held_out_test(examples[i], j) for i, j in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
