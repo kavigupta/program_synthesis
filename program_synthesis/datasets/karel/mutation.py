@@ -405,25 +405,27 @@ class KarelOutputRefExampleMutator(object):
                 return example['beams']
             return [example['output']]
 
-        def get_beams_results(example):
+        def get_beams_result(example, j):
             if use_all_beams_individually:
-                return [x['individual'] for x in example['beams_correct']]
-            return [example['individual']]
+                return example['beams_correct'][j]['individual']
+            return [example['individual']][j]
 
-        def is_valid_syntax(x, j):
+        def is_valid_syntax(example, j):
+            if use_all_beams_individually:
+                return example['beams_correct'][j]['syntax-error'] == 0
             try:
-                parser.parse(tuple(get_beams(x)[j]), debug=False)
+                parser.parse(tuple(example['output']), debug=False)
             except KarelSyntaxError:
                 return False
             return True
 
         def passes_given_tests(example, j):
-            results = get_beams_results(example)[j]
+            results = get_beams_result(example, j)
             assert len(results) == 6
             return all(results[:5])
 
         def passes_held_out_test(example, j):
-            results = get_beams_results(example)[j]
+            results = get_beams_result(example, j)
             assert len(results) == 6
             return bool(results[-1])
 
@@ -443,7 +445,7 @@ class KarelOutputRefExampleMutator(object):
         negative_examples = [tuple(get_beams(examples[i])[j]) for i, j in to_be_used_idx]
         code_is_correct = [passes_held_out_test(examples[i], j) for i, j in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
-        beams = [get_beams(examples[i]) for i, j in to_be_used_idx]
+        beams = [get_beams(examples[i]) for i, j in to_be_used_idx] if for_eval else None
         return cls(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
@@ -452,7 +454,7 @@ class KarelOutputRefExampleMutator(object):
     def __call__(self, idx, karel_example):
         assert self.ref_code[idx]
         result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor,
-                                    code_is_correct=self.code_is_correct[idx], beams=self.beams[idx])
+                                    code_is_correct=self.code_is_correct[idx], beams=self.beams[idx] if self.beams is not None else None)
         assert result.ref_example.code_sequence
         return result
 
