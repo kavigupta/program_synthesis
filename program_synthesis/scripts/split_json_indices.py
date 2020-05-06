@@ -6,6 +6,8 @@ import json
 
 import numpy as np
 
+from datasets.karel.mutation import KarelOutputRefExampleMutator
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--input-file", required=True)
 parser.add_argument("--output-file", required=True)
@@ -19,12 +21,10 @@ assert not os.path.exists(args.output_file)
 with open(args.input_file) as f:
     data = json.load(f)
 
-print("Num data samples", len(data))
-
 length = len(data)
-indices = list(range(length))
-np.random.RandomState(0).shuffle(indices)
-valid_indices = set(indices[int(length * args.start) : int(length * args.end)])
+print("Num data samples", length)
+
+valid_indices = KarelOutputRefExampleMutator.valid_indices(len(data), args.start, args.end)
 
 invalid_indices = set(range(length)) - valid_indices
 for i in invalid_indices:
