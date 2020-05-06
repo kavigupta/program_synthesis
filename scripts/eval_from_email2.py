@@ -41,12 +41,12 @@ def valid_checkpoints():
 
 
 def valid_modes_and_params():
-    for mode in 'train', 'eval', 'real':
+    for mode in 'train', 'eval', 'real', 'realtrain':
         if mode in {'train', 'eval'}:
             params = '1', '0,1', '0,0,1'
             for param in params:
                 yield (mode, param, param), 'always', ''
-        elif mode == 'real':
+        elif mode in {'real', 'realtrain'}:
             for model in 'nearai', 'nearai32':
                 yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25:
@@ -107,11 +107,14 @@ def main(args):
     for (logdir, ckpt_number), (index_last, num_checkpoints), is_overfit_model in valid_checkpoints():
         for (mode, param, render_param), when, extra_args in valid_modes_and_params():
             if is_overfit_model:
-                if mode != 'real':
+                if mode != 'real' and mode != 'realtrain':
                     continue
                 if param[1] != '':
                     continue
                 if param[0] == 'nearai':
+                    continue
+            if mode == 'realtrain':
+                if not is_overfit_model:
                     continue
 
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
@@ -134,16 +137,18 @@ def main(args):
 
             command += extra_args + ' '
 
-            if mode == 'real':
+            if mode == 'real' or mode == 'realtrain':
                 model_data, search_param = param
-                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                suffix = 'val' if mode == 'real' else 'train-only-val-segment'
+                segment = '' if mode == 'real' else ':start=0.998'
+                command += '--karel-file-ref-val baseline/{}-{}.json{}'.format(model_data, suffix, segment)
                 if search_param != '':
                     command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*search_param)
             else:
                 command += '--karel-mutate-ref --karel-mutate-n-dist {dist} '.format(dist=param)
 
             command += ' '
-            if mode == 'train':
+            if mode == 'train' or mode == 'realtrain':
                 command += '--eval-train --limit 2500'
 
             command += ' '
