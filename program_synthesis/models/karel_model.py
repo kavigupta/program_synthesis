@@ -417,6 +417,7 @@ class KarelLGRLRefineBatchProcessor(object):
         self.args = args
         self.vocab = vocab
         self.for_eval = for_eval
+        self.return_edits = self.args.return_edits
 
     def __call__(self, batch):
         input_grids, output_grids, code_seqs = encode_grids_and_outputs(
@@ -435,7 +436,7 @@ class KarelLGRLRefineBatchProcessor(object):
                 volatile=False)
 
         if self.args.karel_refine_dec == 'edit':
-            dec_data = self.compute_edit_ops(batch, ref_code)
+            dec_data = self.compute_edit_ops(batch, ref_code, self.return_edits)
         else:
             dec_data = None
 
@@ -472,7 +473,7 @@ class KarelLGRLRefineBatchProcessor(object):
             ref_code, ref_trace_grids, ref_trace_events, cag_interleave,
             orig_examples)
 
-    def compute_edit_ops(self, batch, ref_code):
+    def compute_edit_ops(self, batch, ref_code, return_edits=False):
         # Sequence length: 2 + len(edit_ops)
         #
         # Op encoding:
@@ -561,7 +562,11 @@ class KarelLGRLRefineBatchProcessor(object):
             for expanded_idx in range(orig_idx * 5, orig_idx * 5 + 5)
         ])
 
-        return PackedDecoderData(rnn_inputs, rnn_outputs, io_embed_indices,
+        if return_edits:
+            return (PackedDecoderData(rnn_inputs, rnn_outputs, io_embed_indices,
+                ref_code), edit_lists)
+        else:
+            return PackedDecoderData(rnn_inputs, rnn_outputs, io_embed_indices,
                 ref_code)
 
     def compute_edit_ops_no_char(self, batch, code_seqs, ref_code):

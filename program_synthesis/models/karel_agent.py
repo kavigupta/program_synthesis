@@ -78,14 +78,14 @@ def _flatten_helper(T, N, _tensor):
 
 class RolloutStorage(object):
     def __init__(self, num_steps, num_processes):
-        self.obs = [[] for i in range(num_steps)] # torch.zeros(num_steps + 1, num_processes, *obs_shape)
-        self.recurrent_hidden_states = [[] for i in range(num_steps)]#torch.zeros( num_steps + 1, num_processes, recurrent_hidden_state_size)
+        self.obs = [[] for i in range(num_steps+1)] # torch.zeros(num_steps + 1, num_processes, *obs_shape)
+        self.recurrent_hidden_states = [[] for i in range(num_steps+1)]#torch.zeros( num_steps + 1, num_processes, recurrent_hidden_state_size)
         self.rewards = torch.zeros(num_steps, num_processes, 1)
         self.value_preds = torch.zeros(num_steps + 1, num_processes, 1)
         self.returns = torch.zeros(num_steps + 1, num_processes, 1)
         self.action_log_probs = torch.zeros(num_steps, num_processes, 1)
 
-        self.actions = torch.zeros(num_steps, num_processes)
+        self.actions = torch.zeros(num_steps , num_processes)
 
         self.masks = torch.zeros(num_steps + 1, num_processes, 1)
 
@@ -314,7 +314,7 @@ class KarelEditEnv(object):
     
     def rollout(self, state, agent, max_rollout_length, rollouts):
 
-        init_state, masked_memory = agent.model.prepare_state(state)
+        init_state, masked_memory, edit_lists = agent.model.prepare_state(state)
 
         tt = torch.cuda if self.args.cuda else torch
         beam_size = 1
@@ -336,7 +336,7 @@ class KarelEditEnv(object):
         rollouts.insert(finished, (prev_tokens, prev_hidden, masked_memory, attn_list), torch.zeros(batch_size),
                             torch.zeros(batch_size,1),  torch.zeros(batch_size,1),  torch.zeros(batch_size,1), torch.ones(batch_size,1), torch.ones(batch_size,1))
         
-        for step in range(max_rollout_length):
+        for step in range(max_rollout_length-1):
             # Make sure there will be no mismatch again when reproducing this stuff
             
             with torch.no_grad():
@@ -367,10 +367,12 @@ class KarelEditEnv(object):
                         finished[batch_id].append(result[batch_id][i])
                     i += 1
         
-
-        orig_examples = state[-1]
+        print(edit_lists)
+        print([[x.sequence for x in y] for y in finished])
 
         output_code = agent.model.model.model.decoder.postprocess_output([[x.sequence for x in y] for y in finished], masked_memory)
+        #(*) Calculate difference in edit ops
+        breakpoint
         rewards = []
         for logit_beam, code_beam, example in zip(finished, output_code, orig_examples):
             for i, (logits, code) in enumerate(zip(logit_beam, code_beam)):
@@ -518,11 +520,16 @@ class KarelEditPolicy(nn.Module):
             dec_data, ref_code, ref_trace_grids,\
                 ref_trace_events, cag_interleave, orig_examples = states
 
+        edit_lists = None if len(dec_data)!=2 else dec_data[1]
+        
         if self.args.cuda:
             input_grids = input_grids.cuda(async=True)
             output_grids = output_grids.cuda(async=True)
             code_seqs = karel_model.maybe_cuda(code_seqs, async=True)
-            dec_data = karel_model.maybe_cuda(dec_data, async=True)
+            if len(dec_data)==2:
+                dec_data = karel_model.maybe_cuda(dec_data[0], async=True)
+            else:
+                dec_data = karel_model.maybe_cuda(dec_data, async=True)
             ref_code = karel_model.maybe_cuda(ref_code, async=True)
             ref_trace_grids = karel_model.maybe_cuda(ref_trace_grids, async=True)
             ref_trace_events = karel_model.maybe_cuda(ref_trace_events, async=True)
@@ -540,7 +547,7 @@ class KarelEditPolicy(nn.Module):
         memory = self.model.model.decoder.prepare_memory(io_embed, ref_code_memory,
                                                    ref_trace_memory, ref_code)
         
-        return init_state, memory
+        return init_state, memory, edit_lists
 
 class KarelAgent(object):
 
@@ -1032,6 +1039,7 @@ class PolicyTrainer(object):
         cum_reward = 0
         for epoch in range(self.args.num_epochs):
             for i, batch in enumerate(self.env.dataset_loader):
+                self.args.batch_size = (len(batch[0]))
                 rollouts = RolloutStorage(self.args.max_rollout_length, self.args.batch_size)
                 with torch.no_grad():
                     rollouts = self.env.rollout(batch, self.actor_critic, self.args.max_rollout_length, rollouts)
@@ -1042,39 +1050,40 @@ class PolicyTrainer(object):
 
                 value_loss, action_loss, dist_entropy = agent.update(rollouts, batch)
                                 
-                #runner+=1*self.args.batch_size
-                #loss = self.Program_PPO_update(experience)
-                cum_reward += rollouts.rewards.sum()/self.args.batch_size
-                print_stats(epoch, i, value_loss, action_loss, dist_entropy, rollouts.rewards.sum()/self.args.batch_size ,cum_reward)
+                runner+=1
+                reward = rollouts.rewards.sum()/self.args.batch_size
+                cum_reward += reward
+                print_stats(epoch, i, action_loss, value_loss, dist_entropy, reward ,cum_reward)
                 
-                #writer.add(runner,'training/action_loss', loss[0])
-                #writer.add(runner,'training/value_loss', loss[1])
-                #writer.add(runner,'training/entropy', loss[2])
-                #writer.add(runner,'training/reward', loss[3])
-                #writer.add(runner,'training/cummulative_reward', cum_reward)
+                breakpoint
+                writer.add(runner,'training/action_loss', action_loss)
+                writer.add(runner,'training/value_loss', value_loss)
+                writer.add(runner,'training/entropy', dist_entropy)
+                writer.add(runner,'training/reward', reward)
+                writer.add(runner,'training/cummulative_reward', cum_reward)
 
                 # Exact eval
-                #if i % self.args.eval_every_n == 0:
-                #    self.actor_critic.model.eval()
-                #    stats = {'correct': 0, 'total': 0}
-                #    for dev_idx, dev_batch in enumerate(self.env.devset_loader):
-                #        batch_res = self.actor_critic.model.model.eval(dev_batch)
-                #        stats['correct'] += batch_res['correct']
-                #        stats['total'] += batch_res['total']
-                #        if dev_idx > self.args.eval_n_steps:
-                #            break
-                #    accuracy = float(stats['correct']) / stats['total']
-                #    print("Dev accuracy: %.5f" % accuracy)
-                #    self.actor_critic.model.train()
-                #writer.add(runner,'eval/acc', accuracy)
+                if i % self.args.eval_every_n == 0:
+                    self.actor_critic.model.eval()
+                    stats = {'correct': 0, 'total': 0}
+                    for dev_idx, dev_batch in enumerate(self.env.devset_loader):
+                        batch_res = self.actor_critic.model.model.eval(dev_batch)
+                        stats['correct'] += batch_res['correct']
+                        stats['total'] += batch_res['total']
+                        if dev_idx > self.args.eval_n_steps:
+                            break
+                    accuracy = float(stats['correct']) / stats['total']
+                    print("Dev accuracy: %.5f" % accuracy)
+                    
+                    self.actor_critic.model.train()
+                writer.add(runner,'eval/acc', accuracy)
 
-                #replay_buffer.add(experience)
             
             #for _ in range(self.args.num_training_steps):
             #    batch = replay_buffer.sample(1)
 
-                #if i % self.args.eval_every_n == 0:
-                #    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int(epoch*(len(self.env.dataset_loader))+i), self.args.model_dir+self.args.model_nickname)
+                if i % self.args.eval_every_n == 0:
+                    saver.save_checkpoint(self.actor_critic.model.model.model, self.actor_critic.optimizer, int(epoch*(len(self.env.dataset_loader))+i), self.args.model_dir+self.args.model_nickname)
 
 
 
