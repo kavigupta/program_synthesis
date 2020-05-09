@@ -73,11 +73,18 @@ class BaseModel(object):
 
     def load_pretrained(self, kind, path):
         if kind == 'entire-model':
-            step = self.saver.restore(path, map_to_cpu=self.args.restore_map_to_cpu,
-                               step=self.args.pretrained_step)
-            assert step == self.args.pretrained_step, "Step {} of model {} does not work".format(path, self.args.pretrained_step)
+            keep_weight = lambda x: True
+        elif kind == 'encoder':
+            keep_weight = lambda x: {'encoder': True, 'code_encoder': True, 'decoder': False, 'optimizer': False}[
+                x.split(".")[0]]
         else:
             raise NotImplementedError
+
+        step = self.saver.restore(path, map_to_cpu=self.args.restore_map_to_cpu,
+                                  step=self.args.pretrained_step, keep_weight=keep_weight)
+        assert step == self.args.pretrained_step, "Step {} of model {} does not work".format(path,
+                                                                                             self.args.pretrained_step)
+
 
     def compute_loss(self, batch):
         raise NotImplementedError

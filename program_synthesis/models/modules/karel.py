@@ -1713,6 +1713,69 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                 *lstm_init(self._cuda, 2, 256, batch_size, pairs_per_example))
 
 
+class LGRLClassifierDecoder(nn.Module):
+    def __init__(self, vocab_size, args):
+        self._cuda = args.cuda
+        super(LGRLClassifierDecoder, self).__init__()
+        self.attention = PackedSequenceAttention(512, 512 * 5)
+        self.final_fc = nn.Sequential(
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 2)
+        )
+
+    def forward(self, io_embed, code_memory):
+        ps, state = code_memory.mem, code_memory.state
+
+        assert len(io_embed.shape) == 3
+        io_embed = io_embed.reshape(io_embed.shape[0], -1)
+        io_embed_per_token = io_embed[ps.orig_batch_indices()]
+        result = self.attention(ps, io_embed_per_token)
+        logits = self.final_fc(result)
+        return logits
+
+
+class PackedSequenceAttention(nn.Module):
+    def __init__(self, x, y):
+        """
+        Represents attention module that can be run on a packed sequence
+        """
+        super().__init__()
+        self.attention_fc = nn.Sequential(
+            nn.Linear(x + y, 512),
+            nn.ReLU(),
+            nn.Linear(512, 512),
+            nn.ReLU(),
+            nn.Linear(512, 1)
+        )
+        self.x = x
+        self.y = y
+
+    def forward(self, ps, extra):
+        """
+        Arguments:
+            ps: PackedSequencePlus representing B batches containing data of size X
+            extra: tensor of size (B, Y) containing extra information per batch
+        Result:
+            tensor of size (B, X) which is the result of running attention on each sequence in ps
+        """
+        assert len(ps.ps.data.shape) == 2
+        assert len(extra.shape) == 2
+        assert extra.shape[0] == len(ps.orig_batch_indices())
+        assert ps.ps.data.shape[1] == self.x
+        assert extra.shape[1] == self.y
+
+        ps_combined = ps.apply(lambda data: torch.cat([data, extra], dim=1))
+        attention_logits = ps_combined.apply(self.attention_fc)
+        values = []
+        for batch_idx, length in enumerate(ps.orig_lengths()):
+            idxs = [batch_idx] * length.item(), list(range(length.item()))
+            logits_for_this = attention_logits.select(*idxs)
+            data_for_this = ps.select(*idxs)
+            values.append((logits_for_this.softmax(axis=0) * data_for_this).sum(0).unsqueeze(0))
+        return torch.cat(values, dim=0)
+
+
 class LGRLKarel(nn.Module):
     def __init__(self, vocab_size, args):
         super(LGRLKarel, self).__init__()
@@ -1730,28 +1793,36 @@ class LGRLKarel(nn.Module):
     def decode_token(self, token, state, memory, attentions=None):
         return self.decoder.decode_token(token, state, memory, attentions)
 
+def get_trace_encoder(args):
+    if args.karel_trace_enc.startswith('conv3d'):
+        trace_encoder = TimeConvTraceEncoder(args)
+    elif args.karel_trace_enc.startswith('lstm'):
+        trace_encoder = RecurrentTraceEncoder(args)
+    elif args.karel_trace_enc == 'none' or args.karel_trace_enc.startswith('aggregate'):
+        trace_encoder = lambda *args: None
+    else:
+        raise ValueError(args.karel_trace_enc)
+    return trace_encoder
+
+def get_code_encoder(args, vocab_size):
+        # code_encoder = CodeEncoderRL
+        if args.karel_code_enc == 'default':
+            code_encoder = CodeEncoder(vocab_size, args)
+        elif args.karel_code_enc == 'none':
+            code_encoder = lambda *args: None
+        else:
+            raise ValueError(args.karel_code_enc)
+        return code_encoder
+
 
 class LGRLRefineKarel(nn.Module):
     def __init__(self, vocab_size, args):
         super(LGRLRefineKarel, self).__init__()
         self.args = args
 
-        if self.args.karel_trace_enc.startswith('conv3d'):
-            self.trace_encoder = TimeConvTraceEncoder(self.args)
-        elif self.args.karel_trace_enc.startswith('lstm'):
-            self.trace_encoder = RecurrentTraceEncoder(self.args)
-        elif self.args.karel_trace_enc == 'none' or self.args.karel_trace_enc.startswith('aggregate'):
-            self.trace_encoder = lambda *args: None
-        else:
-            raise ValueError(self.args.karel_trace_enc)
+        self.trace_encoder = get_trace_encoder(args)
 
-        # code_encoder = CodeEncoderRL
-        if self.args.karel_code_enc == 'default':
-            self.code_encoder = CodeEncoder(vocab_size, args)
-        elif self.args.karel_code_enc == 'none':
-            self.code_encoder = lambda *args: None
-        else:
-            raise ValueError(self.args.karel_code_enc)
+        self.code_encoder = get_code_encoder(args, vocab_size)
 
         if self.args.karel_refine_dec == 'default':
             self.decoder = LGRLSeqRefineDecoder(vocab_size, args)
@@ -1781,3 +1852,26 @@ class LGRLRefineKarel(nn.Module):
 
     def decode_token(self, token, state, memory, attentions=None):
         return self.decoder.decode_token(token, state, memory, attentions)
+
+
+class LGRLClassifierKarel(nn.Module):
+    def __init__(self, vocab_size, args):
+        super(LGRLClassifierKarel, self).__init__()
+        self.args = args
+
+        self.trace_encoder = get_trace_encoder(args)
+
+        self.code_encoder = get_code_encoder(args, vocab_size)
+
+        self.decoder = LGRLClassifierDecoder(vocab_size, args)
+
+        # task_encoder
+        self.encoder = LGRLTaskEncoder(args)
+
+    def forward(self, input_grid, output_grid, ref_code, ref_trace_grids,
+                ref_trace_events, cag_interleave):
+        # batch size x num pairs x 512
+        io_embed = self.encoder(input_grid, output_grid)
+        # PackedSequencePlus, batch size x length x 512
+        ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
+        return self.decoder(io_embed, ref_code_memory)

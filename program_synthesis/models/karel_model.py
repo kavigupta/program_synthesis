@@ -379,6 +379,72 @@ class KarelLGRLRefineModel(BaseKarelModel):
         return KarelLGRLRefineBatchProcessor(self.args, self.vocab, for_eval)
 
 
+class KarelLGRLOverfitModel(BaseKarelModel):
+    def __init__(self, args):
+        self.args = args
+
+        self.vocab = data.PlaceholderVocab(
+            data.load_vocab(args.word_vocab), self.args.num_placeholders)
+        self.model = karel.LGRLClassifierKarel(
+            len(self.vocab) - self.args.num_placeholders, args)
+        if args.cuda:
+            self.model = self.model.cuda()
+
+        self.loss_function = torch.nn.CrossEntropyLoss()
+        super(KarelLGRLOverfitModel, self).__init__(args)
+
+    def common_forward(self, input_tuple):
+        input_grids, output_grids, _1, dec_data, ref_code, \
+                      ref_trace_grids, ref_trace_events, cag_interleave, _2 = input_tuple
+        if self.args.cuda:
+            input_grids = input_grids.cuda(async=True)
+            output_grids = output_grids.cuda(async=True)
+            dec_data = maybe_cuda(dec_data, async=True)
+            ref_code = maybe_cuda(ref_code, async=True)
+            ref_trace_grids = maybe_cuda(ref_trace_grids, async=True)
+            ref_trace_events = maybe_cuda(ref_trace_events, async=True)
+
+        return self.model(
+            input_grids, output_grids, ref_code, ref_trace_grids,
+            ref_trace_events, cag_interleave)
+
+    def get_labels(self, orig_examples):
+        return [int(eg.ref_example.code_is_correct) for eg in orig_examples]
+
+    def compute_loss(self, input_tuple):
+        input_grids, output_grids, code_seqs, dec_data, \
+                            ref_code, ref_trace_grids, ref_trace_events, \
+                            cag_interleave, orig_examples = input_tuple
+        logits = self.common_forward(input_tuple)
+        labels = torch.tensor(self.get_labels(orig_examples))
+        if logits.is_cuda:
+            labels = labels.cuda()
+        loss_val = self.loss_function(logits, labels)
+        return loss_val
+
+    def inference(self, input_tuple):
+        results = self.common_forward(input_tuple)
+        return results[:, 1] - results[:, 0]
+
+    def debug(self, batch):
+        yhat = (self.inference(batch) > 0).cpu().numpy().astype(np.bool)
+        y = np.array(self.get_labels(batch.orig_examples), dtype=np.bool)
+
+        false_positives = np.sum(yhat & ~y)
+        false_negatives = np.sum(~yhat & y)
+        true_positives = np.sum(yhat & y)
+        true_negatives = np.sum(~yhat & ~y)
+
+        print("False positives: ", false_positives)
+        print("True positives: ", true_positives)
+        print("False negatives: ", false_negatives)
+        print("True negatives: ", true_negatives)
+        print("Accuracy: ", np.mean(yhat == y))
+
+    def batch_processor(self, for_eval):
+        return KarelLGRLRefineBatchProcessor(self.args, self.vocab, for_eval)
+
+
 KarelLGRLRefineExample = collections.namedtuple('KarelLGRLRefineExample', (
     'input_grids', 'output_grids', 'code_seqs', 'dec_data',
     'ref_code', 'ref_trace_grids', 'ref_trace_events',
@@ -463,7 +529,7 @@ class KarelLGRLRefineBatchProcessor(object):
                     interleave([[2] * grid_length, trace_interleave],
                                g_ca_interleave))
 
-        orig_examples = batch if self.for_eval or self.args.train_policy_gradient_loss else None
+        orig_examples = batch if self.for_eval or self.args.train_policy_gradient_loss or self.args.model_type == 'karel-lgrl-overfit' else None
 
         if self.args.use_ref_orig:
             orig_examples = prepare_spec.numpy_to_tensor(prepare_spec.lists_to_numpy([('<S>',) + item.ref_example.code_sequence +('</S>',) for item in batch], self.vocab.stoi,-1),False,False)

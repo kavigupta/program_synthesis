@@ -15,7 +15,7 @@ import torch.utils.data
 import data
 from . import executor
 from . import stats
-from .karel.mutation import KarelExampleMutator, KarelIncorrectExampleMutator
+from .karel.mutation import KarelExampleMutator, KarelOutputRefExampleMutator
 
 
 Schema = collections.namedtuple("Schema", ["args", "return_type"])
@@ -106,13 +106,15 @@ class KarelExample(object):
         'input_tests',
         'tests',
         'text',
-        'ref_example', )
+        'ref_example',
+        'code_is_correct',
+        'ref_beams' )
     schema = Schema(None, None)
     code_tree = []
     _empty_trace = executor.KarelTrace([], [])
 
     def __init__(self, idx, guid, code_sequence, input_tests, tests,
-            ref_example=None):
+            ref_example=None, code_is_correct=None, ref_beams=None):
         self.idx = idx
         self.guid = guid
         self.code_sequence = code_sequence
@@ -120,6 +122,8 @@ class KarelExample(object):
         self.tests = tests
         self.text = code_sequence
         self.ref_example = ref_example
+        self.code_is_correct = code_is_correct
+        self.ref_beams = ref_beams
 
     @classmethod
     def from_dict(cls, d):
@@ -140,8 +144,10 @@ class KarelExample(object):
             ref_example = KarelExample.from_dict(ref_dict)
         else:
             ref_example = None
+        code_is_correct = d.get('code_is_correct')
+        ref_beams = d.get('ref_beams')
         return cls(d.get('id', None), d['guid'], d['code'], all_examples[:5], all_examples[5:],
-                ref_example)
+                 ref_example, code_is_correct, ref_beams)
 
     def to_dict(self):
         return {
@@ -153,7 +159,9 @@ class KarelExample(object):
                 'trace_grids': example.get('trace', self._empty_trace).grids,
             } for example in self.input_tests + self.tests],
             'code': self.code_sequence,
-            'ref': self.ref_example.to_dict() if self.ref_example else None
+            'ref': self.ref_example.to_dict() if self.ref_example else None,
+            'code_is_correct' : self.code_is_correct,
+            'ref_beams' : self.ref_beams
         }
 
 
@@ -477,6 +485,14 @@ def get_algolisp_dataset(args, _):
     return train_data, dev_data
 
 
+def karel_output_ref_mutator_mode(args):
+    if args.model_type == 'karel-lgrl-overfit':
+        return 'overfit-check'
+    elif args.iterative_search_use_overfit_model is not None:
+        return 'all'
+    return 'debugger'
+
+
 def get_karel_dataset(args, model, eval_on_train=False):
     suffix = args.dataset[5:]
 
@@ -484,6 +500,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided "
 
     add_trace = args.karel_trace_enc != 'none'
+    mode = karel_output_ref_mutator_mode(args)
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -498,7 +515,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_train, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace, mode, for_eval=eval_on_train, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
@@ -507,7 +524,7 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode, for_eval=True, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=False)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2,
@@ -564,6 +581,7 @@ def get_karel_eval_dataset(args, model):
     assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided but were {} and {}".format(args.karel_mutate_ref, file_ref)
 
     add_trace = args.karel_trace_enc != 'none'
+    mode = karel_output_ref_mutator_mode(args)
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -576,7 +594,7 @@ def get_karel_eval_dataset(args, model):
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator,
-            KarelIncorrectExampleMutator.from_path(args.karel_file_ref_val, add_trace)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode, for_eval=True, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2)

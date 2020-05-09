@@ -14,7 +14,9 @@ import tools
 import models
 import arguments
 
-from tools.iterative_search import IterativeSearch, Strategy, TimeLimitStrategy
+from tools.iterative_search import IterativeSearch, Strategy
+
+from models.karel_model import KarelLGRLOverfitModel
 
 
 def evaluate(args):
@@ -24,6 +26,24 @@ def evaluate(args):
     arguments.backport_default_args(args)
     datasets.set_vocab(args)
     m = models.get_model(args)
+
+    if args.iterative_search_use_overfit_model is not None:
+        assert args.iterative_search is not None, "using an overfit model only makes sense if iterative search is being used"
+        overfit_model_args = eval("dict({})".format(args.iterative_search_use_overfit_model))
+        parsed = vars(arguments.get_arg_parser('overfit', 'eval').parse_args([]))
+        parsed.update(overfit_model_args)
+        parsed = argparse.Namespace(
+            **parsed
+        )
+        tools.restore_args(parsed)
+        arguments.backport_default_args(parsed)
+        datasets.set_vocab(parsed)
+        overfit_model = KarelLGRLOverfitModel(parsed)
+        print("Overfit model")
+        print(overfit_model.model)
+    else:
+        overfit_model = None
+
     if args.eval_final:
         eval_dataset = datasets.get_eval_final_dataset(args, m)
     elif args.eval_train:
@@ -39,11 +59,25 @@ def evaluate(args):
 
     inference = m.inference
 
+    if isinstance(m, KarelLGRLOverfitModel):
+        evaluation.run_overfit_eval(
+            eval_dataset, inference,
+            args.report_path,
+            limit=args.limit)
+
+        return
+
     if args.iterative_search is not None:
-        inference = IterativeSearch(inference, TimeLimitStrategy.limit(Strategy.get(args.iterative_search), args.iterative_search_step_limit), current_executor,
-                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True))
+        inference = IterativeSearch(inference,
+                                    Strategy.get(args.iterative_search),
+                                    current_executor,
+                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True),
+                                    start_with_beams=args.iterative_search_start_with_beams,
+                                    time_limit=args.iterative_search_step_limit,
+                                    overfit_model=overfit_model)
     if args.run_predict:
-        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path, evaluate_on_all=args.evaluate_on_all)
+        evaluation.run_predict(eval_dataset, inference, current_executor.execute, args.predict_path,
+                               evaluate_on_all=args.evaluate_on_all)
     else:
         evaluation.run_eval(
             args.tag, eval_dataset, inference,

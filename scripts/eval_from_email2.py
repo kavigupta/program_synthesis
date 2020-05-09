@@ -10,8 +10,14 @@ from collections import Counter
 
 
 def valid_checkpoints():
-    for logdir in glob.glob('logdirs/*', recursive=True):
+    for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
+            continue
+        if "many-mutations" in logdir:
+            continue
+        if "finetuned-rl-1e-5," in logdir:
+            continue
+        if "finetuned-rl-1e-5-use-heldout," in logdir:
             continue
         numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
@@ -19,42 +25,74 @@ def valid_checkpoints():
                 time_delta = time.time() - os.path.getmtime(ckpt)
             except FileNotFoundError:
                 continue
-            if time_delta < 10 * 60:
-                # ignore really recent checkpoints (last 10 minutes)
+            if time_delta < 60 * 60:
+                # ignore really recent checkpoints (last hour)
                 # these are deleted by the time an evaluation can be run :(
                 continue
             ckpt_number = int(ckpt[-8:])
             cm100 = ckpt_number - 100
-            if (cm100 % 50000 != 0 and cm100 % 10000 == 0) or ckpt_number < 1000:
+            cm1000 = ckpt_number - 1000
+            if (cm100 % 25000 != 0 and cm1000 % 25000 != 0) or ckpt_number < 1000:
                 continue
             numbers.append(ckpt_number)
         numbers.sort(reverse=True)
         for idx, ckpt_number in enumerate(numbers):
-            yield (logdir, ckpt_number), (idx, len(numbers))
+            yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
 
 
 def valid_modes_and_params():
-    for mode in 'train', 'eval', 'real':
+    for mode in 'train', 'eval', 'real', 'realtrain':
         if mode in {'train', 'eval'}:
             params = '1', '0,1', '0,0,1'
             for param in params:
-                yield (mode, param, param), 'always'
-        elif mode == 'real':
+                yield (mode, param, param), 'always', ''
+        elif mode in {'real', 'realtrain'}:
             for model in 'nearai', 'nearai32':
-                yield (mode, (model, ''), model), 'always'
+                yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25:
                     for strategy in 'greedy', 'best_first':
-                        when = 'always' if limit <= 10 and strategy == 'greedy' else 'sometimes'
-                        yield (mode, (model, (strategy, limit)), "{},,{},,{}".format(model, strategy, limit)), when
+                        when = 'always' if strategy == 'best_first' else 'sometimes'
+                        for extra in '', '--iterative-search-start-with-beams':
+                            if extra != '':
+                                if strategy != 'best_first':
+                                    continue
+                                if model == 'nearai':
+                                    continue
+                            render_extra = '' if extra == '' else ',,start-with-beams'
+                            for overfit_model, overfit_cmd in overfit_models_to_use():
+                                if overfit_model == '':
+                                    render_extra_with = render_extra
+                                    extra_with = extra
+                                else:
+                                    if strategy != 'best_first' or limit != 25 or model != "nearai32":
+                                        continue
+                                    render_extra_with = render_extra + ',,overfit=' + overfit_model
+                                    extra_with = extra + " " + overfit_cmd
+                                yield (mode, (model, (strategy, limit)), "{},,{},,{}{}".format(model, strategy, limit, render_extra_with)), when, extra_with
         else:
             assert False
+
+def overfit_models_to_use():
+    models = [
+        (2000, "overfit-vanilla-slow-split"),
+        #(2000, "overfit-aggregate-with-io-slow-split")
+    ]
+    yield '', ''
+    for step, model in models:
+        [logdir] = glob.glob("logdirs-overfit/{},*".format(model))
+        param = 'dataset="karel",step={},model_dir="{}"'.format(step, logdir)
+        cmd = "--iterative-search-use-overfit-model '{}'".format(param)
+        yield model.replace("-", "_"), cmd
 
 
 def already_executed(output_path):
     done = False
     if os.path.exists(output_path):
         with open(output_path) as f:
-            res = json.loads(next(f))
+            try:
+                res = json.loads(next(f))
+            except StopIteration:
+                return False
         if res.get('done', res.get('total', 0) >= 2500):
             done = True
     return done
@@ -66,35 +104,51 @@ def main(args):
     else:
         batch_size = 16 if args.cpu else 64
     by_priority = []
-    for (logdir, ckpt_number), (index_last, num_checkpoints) in valid_checkpoints():
-        for (mode, param, render_param), when in valid_modes_and_params():
+    for (logdir, ckpt_number), (index_last, num_checkpoints), is_overfit_model in valid_checkpoints():
+        for (mode, param, render_param), when, extra_args in valid_modes_and_params():
+            if is_overfit_model:
+                if mode != 'real' and mode != 'realtrain':
+                    continue
+                if param[1] != '':
+                    continue
+                if param[0] == 'nearai':
+                    continue
+            if mode == 'realtrain':
+                if not is_overfit_model:
+                    continue
+
             output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
                                                                                    dist=render_param,
                                                                                    step=ckpt_number, mode=mode)
             if already_executed(output_path):
                 continue
 
-            command = ('python -u program_synthesis/eval.py --model_type karel-lgrl-ref --evaluate-on-all '
+            command = ('python -u program_synthesis/eval.py --model_type {model_type} --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
                        '--batch_size {batch_size} '
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
+                model_type='karel-lgrl-overfit' if is_overfit_model else 'karel-lgrl-ref',
                 batch_size=batch_size,
                 step=ckpt_number, logdir=logdir,
                 output_path=output_path
             )
 
-            if mode == 'real':
+            command += extra_args + ' '
+
+            if mode == 'real' or mode == 'realtrain':
                 model_data, search_param = param
-                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                suffix = 'val' if mode == 'real' else 'train-only-val-segment'
+                segment = '' if mode == 'real' else ':start=0.998'
+                command += '--karel-file-ref-val baseline/{}-{}.json{}'.format(model_data, suffix, segment)
                 if search_param != '':
                     command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*search_param)
             else:
                 command += '--karel-mutate-ref --karel-mutate-n-dist {dist} '.format(dist=param)
 
             command += ' '
-            if mode == 'train':
+            if mode == 'train' or mode == 'realtrain':
                 command += '--eval-train --limit 2500'
 
             command += ' '
@@ -102,7 +156,9 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if index_last == 0:
+            if is_overfit_model:
+                priority = 1
+            elif index_last == 0:
                 priority = 11
             elif num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
                 priority = 21
@@ -110,19 +166,25 @@ def main(args):
                 priority = 100
             if when == 'always':
                 priority -= 1
+            if "overfit=" in command:
+                priority -= 1
             by_priority.append((priority, command))
     by_priority.sort()
-    print("commands by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    print_classes(by_priority)
     assert args.max_commands is None or args.priority is None, "cannot specify both a maximal number of commands and a maximal priority"
     if args.max_commands is not None:
         by_priority = by_priority[:args.max_commands]
     elif args.priority is not None:
         by_priority = [(x, y) for x, y in by_priority if x <= args.priority]
-    print("commands to use by priority class:", Counter(x for x, _ in by_priority), file=sys.stderr)
+    print_classes(by_priority)
 
     for _, command in by_priority:
         print(command)
 
+def print_classes(by_priority):
+    for clas, count in sorted(Counter(x for x, _ in by_priority).items()):
+        print(clas, count, file=sys.stderr)
+    print(file=sys.stderr)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-commands', type=int, default=None)

@@ -8,6 +8,9 @@ import random
 import tqdm
 import os
 
+import sklearn
+import numpy as np
+
 from datasets import dataset
 from datasets import executor
 from datasets import stats
@@ -166,6 +169,9 @@ def run_predict(dataset, inference, do_execute, inference_output_path, evaluate_
             stats = executor.evaluate_code(res.code_sequence, example.schema.args, tests, do_execute)
             prediction = dict(
                 output=res.info['candidates'][0],
+                beams=res.info['candidates'],
+                beams_correct=[executor.evaluate_code(hypothesis, example.schema.args, tests, do_execute) for hypothesis
+                               in res.info['candidates']],
                 is_correct=stats['correct'] == stats['total'],
                 individual=stats['individual']
             )
@@ -219,7 +225,46 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
         print("Stopped.")
         report.save(done)
         report.display()
-    
+
+def run_overfit_eval(dataset, inference, report_path=None, limit=None):
+    """Runs inference of given model on eval set, and executes resulting code.
+
+    Args:
+        tag: str, tag of the run to save report.
+        dataset: Dataset, iterable of CodeExample to evaluate on.
+        inference: func, produces code for given CodeExamples.
+        do_execute: func, runs given code with given arguments.
+        show_info: Show specific example additional information.
+    """
+    true_labels = []
+    pred_logits = []
+    for batch in limited(dataset, limit):
+        start = time.time()
+        results = inference(batch)
+        true_labels += [int(eg.ref_example.code_is_correct) for eg in batch.orig_examples]
+        pred_logits += results.detach().cpu().numpy().tolist()
+        confusion = sklearn.metrics.confusion_matrix(true_labels, np.array(pred_logits) > 0)
+        accuracy = (confusion[0, 0] + confusion[1, 1]) / np.sum(confusion)
+        print("Done with {} examples in {:.2f}s. Accuracy={:.2f} confusion={}".format(len(batch.orig_examples),
+                                                                                      time.time() - start,
+                                                                                      accuracy, confusion.tolist()))
+
+    fpr, tpr, thresh = sklearn.metrics.roc_curve(true_labels, pred_logits)
+
+    result = dict(
+        accuracy=accuracy,
+        confusion=confusion.tolist(),
+        fpr=fpr.tolist(),
+        tpr=tpr.tolist(),
+        thresh=thresh.tolist(),
+        done=True
+    )
+
+    if report_path:
+        with open(report_path, "w") as f:
+            json.dump(result, f)
+    else:
+        print(result)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='')

@@ -283,8 +283,9 @@ def mutate_n(tree, count, probs=None, rng=None, allow_in_place=False):
     return tree
 
 
-def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True):
+def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_example=True, code_is_correct=None, beams=None):
     from ..dataset import KarelExample
+    karel_example = copy.copy(karel_example)
     if check_ref_example:
         assert karel_example.ref_example is None
     # TODO: Get the real trace
@@ -301,7 +302,9 @@ def add_incorrect_code(karel_example, new_code, add_trace, executor, check_ref_e
         guid=None,
         code_sequence=new_code,
         input_tests=new_tests,
-        tests=karel_example.tests)
+        tests=karel_example.tests,
+        code_is_correct=code_is_correct)
+    karel_example.ref_beams = beams
     return karel_example
 
 
@@ -330,57 +333,157 @@ class KarelExampleMutator(object):
         return new_code
 
 
-class KarelIncorrectExampleMutator(object):
-    def __init__(self, to_be_used, incorrect_code, add_trace):
+class KarelOutputRefExampleMutator(object):
+    def __init__(self, to_be_used_indices, ref_code, code_is_correct, beams, add_trace):
         """
-        Represents a list of incorrect examples, one per correct code example
+        Represents a list of reference outputs, one per example in the training data.
+
+        This is used to represent incorrect programs, but it can also be used to represent
+            potentially overfit programs.
 
         Arguments:
-            to_be_used: a list of booleans, each of which represents whether the given item should be used.
-                The purpose of this is to be able to filter out items that represent correct programs, which
-                are not to be used
+            to_be_used_indices: a list of indices of the code examples to be used
 
-            incorrect_code: a list of tuples, each of which represents an incorrect program. This must satisfy the
-                invariant len(incorrect_code) == sum(to_be_used)
+            ref_code: a list of tuples, each of which represents a program to be used.
+                Each of these examples must correspond to the equivalent index in
+                to_be_used_indices
+
+            code_is_correct: a list of whether each code example is correct
+
+            beams: a list of all the beams (including ref_code) for each code example
 
             add_trace: whether to add the execution trace when modifying a program
         """
         self.add_trace = add_trace
         self.executor = executor.KarelExecutor(action_limit=250)
-        self.to_be_used = to_be_used
-        self.incorrect_code = incorrect_code
+        self.to_be_used_indices = to_be_used_indices
+        self.beams = beams
+        self.code_is_correct = code_is_correct
+        self.ref_code = ref_code
 
-    @staticmethod
-    def from_path(karel_ref_file_train, add_trace):
+    @classmethod
+    def from_path(cls, karel_ref_file_train, add_trace, mode='debugger', for_eval=False, balancing='equal-count',
+                  use_all_beams_individually=False):
+        """
+        Get a mutator from the given file.
+
+        Arguments:
+            karel_ref_file_train: the file to get the data from. Can also include some keyword arguments (see arguments.py)
+            add_trace: whether or not to add the traces
+            mode: which mode to load the data in.
+                If 'debugger', load all examples which do not pass all 5 test cases
+                If 'overfit-check', load all examples which pass 5 test cases, and
+                    ensure an equal number pass the held out test or not.
+            for_eval: whether the given dataset will be used for evaluation or not. If so, do not require a 50/50 split
+                in some cases
+            balancing: if 'equal-count', balances equally when for_eval is False, if 'none' does not.
+        """
+
+        assert balancing in ('equal-count', 'none')
+
+        if for_eval:
+            assert not use_all_beams_individually
+
         if karel_ref_file_train is None:
             return None
+
+        if ":" in karel_ref_file_train:
+            karel_ref_file_train, kwargs = karel_ref_file_train.split(":")
+            kwargs = eval("dict({})".format(kwargs))
+        else:
+            kwargs = {}
 
         with open(karel_ref_file_train) as f:
             examples = json.load(f)
 
+        valid_indices = cls.valid_indices(len(examples), **kwargs)
+
         parser = KarelForSynthesisParser()
 
-        def can_be_used(x):
-            if x['passes_given_tests']:
-                return False
+        def get_beams(example):
+            if use_all_beams_individually:
+                return example['beams']
+            return [example['output']]
+
+        def get_beams_result(example, j):
+            if use_all_beams_individually:
+                return example['beams_correct'][j]['individual']
+            return [example['individual']][j]
+
+        def is_valid_syntax(example, j):
+            if use_all_beams_individually:
+                return example['beams_correct'][j]['syntax-error'] == 0
             try:
-                parser.parse(tuple(x['output']), debug=False)
+                parser.parse(tuple(example['output']), debug=False)
             except KarelSyntaxError:
                 return False
             return True
 
-        to_be_used = [can_be_used(x) for x in examples]
-        negative_examples = [tuple(x['output']) for x, used in zip(examples, to_be_used) if used]
-        return KarelIncorrectExampleMutator(to_be_used, negative_examples, add_trace)
+        def passes_given_tests(example, j):
+            results = get_beams_result(example, j)
+            assert len(results) == 6
+            return all(results[:5])
+
+        def passes_held_out_test(example, j):
+            results = get_beams_result(example, j)
+            assert len(results) == 6
+            return bool(results[-1])
+
+        can_be_used = {
+            'debugger': lambda x, j: not passes_given_tests(x, j) and is_valid_syntax(x, j),
+            'overfit-check': lambda x, j: passes_given_tests(x, j) and is_valid_syntax(x, j),
+            'all': is_valid_syntax
+        }[mode]
+
+        to_be_used_idx = [(i, j)
+                          for i in sorted(valid_indices)
+                          for j in range(len(get_beams(examples[i])))
+                          if can_be_used(examples[i], j)]
+        print("number of examples pre-balancing", len(to_be_used_idx))
+        if mode == 'overfit-check' and not for_eval and balancing == 'equal-count':
+            to_be_used_idx = equal_halves(to_be_used_idx, lambda ij: passes_held_out_test(examples[ij[0]], ij[1]))
+
+        print("number of examples post-balancing", len(to_be_used_idx))
+        negative_examples = [tuple(get_beams(examples[i])[j]) for i, j in to_be_used_idx]
+        code_is_correct = [passes_held_out_test(examples[i], j) for i, j in to_be_used_idx]
+        # get each of the beams. If not found the output is the only beam
+        beams = [get_beams(examples[i]) for i, j in to_be_used_idx] if for_eval else None
+        return cls(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
-        return [idx for i, idx in enumerate(index) if self.to_be_used[i]]
+        return [index[i] for i, j in self.to_be_used_indices]
 
     def __call__(self, idx, karel_example):
-        assert self.incorrect_code[idx]
-        result = add_incorrect_code(karel_example, self.incorrect_code[idx], self.add_trace, self.executor)
+        assert self.ref_code[idx]
+        result = add_incorrect_code(karel_example, self.ref_code[idx], self.add_trace, self.executor,
+                                    code_is_correct=self.code_is_correct[idx], beams=self.beams[idx] if self.beams is not None else None)
         assert result.ref_example.code_sequence
         return result
+
+    @classmethod
+    def valid_indices(cls, length, start=0, end=1):
+        indices = list(range(length))
+        np.random.RandomState(0).shuffle(indices)
+        return set(indices[int(length * start) : int(length * end)])
+
+def equal_halves(items, predicate, seed=0):
+    rng = np.random.RandomState(seed)
+    pos_idx = []
+    neg_idx = []
+    for i, item in enumerate(items):
+        if predicate(item):
+            pos_idx.append(i)
+        else:
+            neg_idx.append(i)
+    if len(pos_idx) < len(neg_idx):
+        rng.shuffle(neg_idx)
+        neg_idx = neg_idx[:len(pos_idx)]
+    else:
+        rng.shuffle(pos_idx)
+        pos_idx = pos_idx[:len(neg_idx)]
+    all_idx = sorted(pos_idx + neg_idx)
+    return [items[i] for i in all_idx]
+
 
 # Definition of Action Parameters
 

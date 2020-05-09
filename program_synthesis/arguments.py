@@ -18,7 +18,9 @@ def get_arg_parser(title, mode):
     parser.add_argument('--batch_size', type=int, default=4)#128
     parser.add_argument('--load-sync', action='store_true')
     parser.add_argument('--iterative-search', type=str, default=None)
+    parser.add_argument('--iterative-search-start-with-beams', action='store_true', help="start with the beams from the original model")
     parser.add_argument('--iterative-search-step-limit', type=int, default=5)
+    parser.add_argument('--iterative-search-use-overfit-model', help="k=v,k=v... pairs of data to put into the overfit model")
     parser.add_argument('--num_placeholders', type=int, default=0)  # 100
     parser.add_argument('--use_ref_orig', action='store_true') # False
     parser.add_argument('--model_nickname', type=str, default='')
@@ -133,9 +135,20 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
     infer_group.add_argument('--search-bfs', action='store_true', default=True)
     infer_group.add_argument('--karel-file-ref-train', help='json file containing a list of dictionaries with keys '
-                                                            'is_correct and output, incorrect examples will be used')
-    infer_group.add_argument('--karel-file-ref-val', help='json file containing a list of dictionaries with keys '
-                                                          'is_correct and output, incorrect examples will be used')
+                                                            'is_correct, passes_given_tests, and output. '
+                                                            'You can add a colon followed by keyword args '
+                                                            'start= and end=, which determine which segment '
+                                                            'of the indices to use. For example, '
+                                                            '--karel-file-ref-train x.json:start=0.2,end=0.8 '
+                                                            'loads the middle 60% of the indices. '
+                                                            'The indices are shuffled deterministically '
+                                                            'before loading but the ranges do overlap as '
+                                                            'expected')
+    infer_group.add_argument('--karel-file-ref-val', help='see help for --karel-ref-file-train')
+    infer_group.add_argument('--karel-file-ref-train-balancing', choices=['equal-count', 'none'], default='equal-count',
+                             help='How to balance the positive/negative examples. Only applies to classification models')
+    infer_group.add_argument('--karel-file-ref-train-all-beams', action='store_true',
+                             help='Whether to use all the beams individually to train the model.')
     infer_group.add_argument('--karel-mutate-ref', action='store_true')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 

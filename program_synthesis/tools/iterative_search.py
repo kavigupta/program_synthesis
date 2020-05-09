@@ -1,28 +1,47 @@
 from abc import ABC, abstractmethod
 
 from collections import defaultdict
+from itertools import count
 
 from datasets.executor import evaluate_code
 from datasets.karel import mutation
 
 from models.base import InferenceResult
 
+from datasets.karel.utils import chunked
+
 
 class IterativeSearch:
-    def __init__(self, original_inference, init_strategy, executor, add_trace, batch_processor):
+    def __init__(self, original_inference, init_strategy, executor, add_trace, batch_processor, start_with_beams,
+                 time_limit, overfit_model):
         self.original_inference = original_inference
         self.init_strategy = init_strategy
         self.executor = executor
         self.add_trace = add_trace
         self.batch_processor = batch_processor
+        self.overfit_model = overfit_model
+        # whether to start with the beams from the original model
+        self.start_with_beams = start_with_beams
+        self.time_limit = time_limit
 
     def __call__(self, batch):
+        original_batch = batch
+
         strategies = [self.init_strategy(item) for item in batch.orig_examples]
         done = [False] * len(batch.orig_examples)
+        finalized_candidates = [[] for _ in range(len(batch.orig_examples))]
         attempts = [[] for _ in range(len(batch.orig_examples))]
-        index_mapping = {i: i for i in range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
-        while True:
-            results = self.original_inference(batch)
+        index_mapping = {i: i for i in
+                         range(len(batch.orig_examples))}  # mapping from indices in batch/strategies to indices in done
+        num_inferences = 0
+        for iteration_idx in count():
+            if iteration_idx == 0 and self.start_with_beams:
+                results = [example.ref_beams for example in batch.orig_examples]
+                assert not any(
+                    x is None for x in results), "the original examples must contain a full list of reference beams"
+            else:
+                results = [result.info['candidates'] for result in self.original_inference(batch)]
+                num_inferences += 1
             decisions = [strategy.decide(result, lambda code: self.test_results(code, example)) for
                          strategy, result, example in zip(strategies, results, batch.orig_examples)]
             new_index_mapping = {}
@@ -30,42 +49,85 @@ class IterativeSearch:
             new_wrong_code = []
             new_batch = []
             for idx, decision in enumerate(decisions):
-                if decision[0] == 'accept':
-                    done[index_mapping[idx]] = decision[1]
-                elif decision[0] == 'expand':
+                give_up = num_inferences == self.time_limit and not finalized_candidates[index_mapping[idx]]
+                if decision[0] == 'accept' or give_up:
+                    finalized_candidates[index_mapping[idx]].append(decision[1])
+
+                if decision[0] != 'expand' and self.overfit_model is None:
+                    # only mark something done if the overfit model is not in effect,
+                    # otherwise we keep going until we run out of time
+                    done[index_mapping[idx]] = True
+                else:
                     attempts[index_mapping[idx]].append(decision[1])
                     new_wrong_code.append(decision[1])
                     new_batch.append(batch.orig_examples[idx])
                     new_strategies.append(strategies[idx])
                     new_index_mapping[len(new_wrong_code) - 1] = index_mapping[idx]
-                else:
-                    raise ValueError(
-                        "Invalid decision: {}. The first element must be either 'accept' or 'expand' but was {}".format(
-                            decision, decision[0]))
-            if all(x is not False for x in done):
+
+            if all(done) or num_inferences == self.time_limit:
                 break
             index_mapping = new_index_mapping
             strategies = new_strategies
             batch = self.update_wrong_code_and_pack(new_batch, new_wrong_code)
-        return [InferenceResult(code_sequence=code, info={'candidates' : [code], 'expanded' : [expanded]})
-                   for code, expanded in zip(done, attempts)]
 
-    def update_wrong_code_and_pack(self, new_examples, new_wrong_code):
+        if self.overfit_model is None:
+            assert all(len(candidates) == 1 for candidates in finalized_candidates)
+            best_code = [candidates[0] for candidates in finalized_candidates]
+        else:
+            best_code = self.select_best_code_per(original_batch, finalized_candidates)
+
+        return [InferenceResult(code_sequence=code, info={'candidates': [code], 'expanded': [expanded]})
+                for code, expanded in zip(best_code, attempts)]
+
+    def update_wrong_code_and_pack(self, new_examples, new_wrong_code, add_trace=None, batch_processor=None):
+        if add_trace is None:
+            # this case is when we are using the forward model not the overfit model which may
+            # need the trace
+            add_trace = self.add_trace
+        if batch_processor is None:
+            batch_processor = self.batch_processor
         assert new_examples
         assert len(new_examples) == len(new_wrong_code)
         updated_examples = []
         for example, code in zip(new_examples, new_wrong_code):
             updated_examples.append(
-                mutation.add_incorrect_code(example, tuple(code), self.add_trace, self.executor, check_ref_example=False))
-        return self.batch_processor(updated_examples)
+                mutation.add_incorrect_code(example, tuple(code), add_trace, self.executor,
+                                            check_ref_example=False))
+        return batch_processor(updated_examples)
 
     def test_results(self, code, example):
         return evaluate_code(code, example.schema.args, example.input_tests, self.executor.execute)
 
+    def run_overfit_model(self, items):
+        egs, cands = zip(*items)
+        batch = self.update_wrong_code_and_pack(egs, cands, add_trace=True,
+                                                batch_processor=self.overfit_model.batch_processor(for_eval=True))
+        return self.overfit_model.inference(batch)
+
+    def select_best_code_per(self, original_batch, finalized_candidates):
+        flattened_candidates = []
+        flattened_examples = []
+        indices_per_original = []
+        for example, candidates in zip(original_batch.orig_examples, finalized_candidates):
+            indices_per_original.append([])
+            for candidate in candidates:
+                indices_per_original[-1].append(len(flattened_examples))
+                flattened_examples.append(example)
+                flattened_candidates.append(candidate)
+
+        results = []
+        for items in chunked(zip(flattened_examples, flattened_candidates), len(original_batch.orig_examples)):
+            results += self.run_overfit_model(items).cpu().detach().numpy().tolist()
+        best_code = []
+        for idxs, candidates in zip(indices_per_original, finalized_candidates):
+            best_idx = max(range(len(candidates)), key=lambda i: results[idxs[i]])
+            best_code.append(candidates[best_idx])
+        return best_code
+
 
 class Strategy(ABC):
     @abstractmethod
-    def decide(self, inference_result, evaluate):
+    def decide(self, candidates, evaluate):
         pass
 
     @staticmethod
@@ -78,26 +140,6 @@ class Strategy(ABC):
             'greedy': lambda: GreedyStrategy,
             'best_first': lambda: BestFirstSearch
         }[start](**kwargs)
-
-
-class TimeLimitStrategy(Strategy):
-
-    @staticmethod
-    def limit(init_strategy, limit):
-        return lambda example: TimeLimitStrategy(init_strategy(example), limit)
-
-    def __init__(self, strategy, limit):
-        self.strategy = strategy
-        self.limit = limit
-        self.step = 0
-
-    def decide(self, inference_result, evaluate):
-        self.step += 1
-        assert self.step <= self.limit
-        decision, node = self.strategy.decide(inference_result, evaluate)
-        if self.step == self.limit:
-            return 'accept', node
-        return decision, node
 
 
 def valid(considered_program, result):
@@ -113,9 +155,9 @@ class GreedyStrategy(Strategy):
         self.seen = set()
         del item  # no need
 
-    def decide(self, inference_result, evaluate):
+    def decide(self, candidates, evaluate):
         unseen = []
-        for considered in inference_result.info['candidates']:
+        for considered in candidates:
             considered = tuple(considered)
             if considered in self.seen:
                 continue
@@ -123,10 +165,12 @@ class GreedyStrategy(Strategy):
             if not valid(considered, res):
                 continue
             if res['correct'] == res['total']:
+                self.seen.add(considered)
                 return 'accept', considered
             unseen.append((res['correct'], considered))
         if not unseen:
-            return 'accept', inference_result.info['candidates'][0]
+            self.seen.add(candidates[0])
+            return 'accept', candidates[0]
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
         return 'expand', unseen[0][1]
@@ -137,21 +181,21 @@ class BestFirstSearch(Strategy):
         self.seen = set()
         self.by_number_correct = defaultdict(list)
 
-    def decide(self, inference_result, evaluate):
-        for considered in inference_result.info['candidates']:
+    def decide(self, candidates, evaluate):
+        for considered in candidates:
             considered = tuple(considered)
             if considered in self.seen:
                 continue
             res = evaluate(considered)
             if not valid(considered, res):
                 continue
-            if res['correct'] == res['total']:
-                return 'accept', considered
             self.seen.add(considered)
+            assert res['total'] == 5
             self.by_number_correct[res['correct']].append(considered)
 
         for n_correct in sorted(self.by_number_correct, reverse=True):
             if self.by_number_correct[n_correct]:
-                return 'expand', self.by_number_correct[n_correct].pop(0)
+                decision = 'accept' if n_correct == 5 else 'expand'
+                return decision, self.by_number_correct[n_correct].pop(0)
 
-        return 'accept', tuple(inference_result.info['candidates'][0])
+        return 'accept', tuple(candidates[0])
