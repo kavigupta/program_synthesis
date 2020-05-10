@@ -75,6 +75,7 @@ def valid_modes_and_params():
 def overfit_models_to_use():
     models = [
         (2000, "overfit-vanilla-slow-split"),
+        (51_000, "overfit-awoi-all-beams-balanced-load-debugger"),
         #(2000, "overfit-aggregate-with-io-slow-split")
     ]
     yield '', ''
@@ -139,9 +140,10 @@ def main(args):
 
             if mode == 'real' or mode == 'realtrain':
                 model_data, search_param = param
-                suffix = 'val' if mode == 'real' else 'train-only-val-segment'
-                segment = '' if mode == 'real' else ':start=0.998'
-                command += '--karel-file-ref-val baseline/{}-{}.json{}'.format(model_data, suffix, segment)
+                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                if mode == 'realtrain':
+                    # 0.91 to avoid overlap with 0-0.9
+                    command += ' --karel-file-ref-train baseline/{}-train-only-val-segment.json:start=0.91'.format(model_data)
                 if search_param != '':
                     command += ' --iterative-search {} --iterative-search-step-limit {}'.format(*search_param)
             else:
