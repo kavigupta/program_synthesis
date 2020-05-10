@@ -447,7 +447,7 @@ class KarelOutputRefExampleMutator(object):
         negative_examples = [tuple(get_beams(examples[i])[j]) for i, j in to_be_used_idx]
         code_is_correct = [passes_held_out_test(examples[i], j) for i, j in to_be_used_idx]
         # get each of the beams. If not found the output is the only beam
-        beams = [get_beams(examples[i]) for i, j in to_be_used_idx] if for_eval else None
+        beams = [examples[i].get('beams', [examples[i]['output']]) for i, j in to_be_used_idx] if for_eval else None
         return cls(to_be_used_idx, negative_examples, code_is_correct, beams, add_trace)
 
     def filter_index(self, index):
