@@ -483,7 +483,7 @@ class KarelLGRLRefineBatchProcessor(object):
         self.args = args
         self.vocab = vocab
         self.for_eval = for_eval
-        self.return_edits = self.args.return_edits
+        self.return_edits = getattr(self.args, 'return_edits', False)
 
     def __call__(self, batch):
         input_grids, output_grids, code_seqs = encode_grids_and_outputs(
