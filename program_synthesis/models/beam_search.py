@@ -44,6 +44,105 @@ class BeamSearchState(object):
 
 BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs', 'log_probs_torch'])
 
+def length_penalty(sequence_lengths, penalty_factor):
+    """ 
+    Calculate the length penalty according to 
+    https://arxiv.org/abs/1609.08144
+    lp(Y) =(5 +|Y|)^α / (5 + 1)^α
+
+    Input:
+    sequence_lenthgs: the sequences length of all hypotheses of size [batch size x beam size x vocab size]
+    penalty_factor: A scalar that weights the length penalty.
+    
+    Returns:
+    The length penalty factor, a tensor fo shape [batch size x beam size].
+    """
+    return torch.div((5. + sequence_lengths)**penalty_factor, (5. + 1.)
+                **penalty_factor)
+
+def hyp_score(log_probs, sequence_lengths, penalty_factor):
+    """
+    Calculates scores for beam search hypotheses.
+    """
+
+    # Calculate the length penality
+    length_penality_ = length_penalty(
+        sequence_lengths=sequence_lengths,
+        penalty_factor=penalty_factor)
+
+    score = log_probs / length_penality_
+    
+    return score, length_penality_
+
+def Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty):
+
+    """
+    Calculate prev_probs using the length penalty
+
+    Returns:
+    the previous probabilities, their indices and the previously predicted tokens
+    """
+    tt = torch.cuda if cuda else torch
+
+    batch_size,actual_beam_size,logit_size = sizes
+
+    if step>0:
+
+        # Clone log probs
+        curr_scores = total_log_probs.clone()
+
+        lengths_to_add = Variable(tt.FloatTensor(batch_size*actual_beam_size*logit_size).fill_(0)).view(batch_size,actual_beam_size,logit_size)
+        add_mask = (1 - finished_penalty)
+        lengths_to_add = add_mask.repeat(1, logit_size).view(batch_size,actual_beam_size,logit_size) * lengths_to_add
+
+        new_prediction_lengths = lengths_to_add + lengths_penalty.repeat(1, logit_size).view(batch_size,actual_beam_size,logit_size).float()
+
+        # Compute length penalty
+        curr_scores, lp = hyp_score(
+        log_probs=curr_scores,
+        sequence_lengths=new_prediction_lengths,
+        penalty_factor=0.6)
+        curr_scores = curr_scores.view(batch_size, -1)
+
+        # Recover log probs
+        prev_probs, indices = curr_scores.topk(actual_beam_size, dim=1)
+
+        prev_tokens = (indices % logit_size)
+
+        target_len = []
+        for b in range(batch_size):
+            for be in range(actual_beam_size):
+                target_len.append(lp[b][be][prev_tokens[b][be]])
+
+        target_len = torch.stack(target_len).view(batch_size, actual_beam_size)
+        prev_probs = torch.mul(prev_probs, target_len) 
+
+        # Calculate the length and mask of the next predictions.
+        # 1. Finished beams remain unchanged
+        # 2. Beams that are now finished (EOS predicted) remain unchanged
+        # 3. Beams that are not yet finished have their length increased by 1
+        eos = prev_tokens == 1  
+
+        finished_penalty = (finished_penalty==1) | eos
+        finished_penalty = finished_penalty.float().view(batch_size, actual_beam_size)
+
+        lengths_to_add = (1 - finished_penalty)
+        next_prediction_len = target_len
+        next_prediction_len += lengths_to_add
+
+        lengths_penalty = next_prediction_len
+        prev_tokens = prev_tokens.view(-1)
+    
+        return prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty
+    
+    else:
+        log_probs_flat = total_log_probs.view(batch_size, -1)
+        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
+        prev_tokens = (indices % logit_size).view(-1)
+
+        return prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty
+
+
 
 def beam_search(*args, volatile=True, **kwargs):
     if volatile:
@@ -61,7 +160,8 @@ def beam_search_(batch_size,
                 max_decoder_length=MAX_DECODER_LENGTH,
                 return_attention=False,
                 return_beam_search_result=False,
-                differentiable=False):
+                differentiable=False,
+                use_length_penalty=False):
     # enc: batch size x hidden size
     # memory: batch size x sequence length x hidden size
     tt = torch.cuda if cuda else torch
@@ -80,8 +180,10 @@ def beam_search_(batch_size,
     b_idx = Variable(
         torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1))
 
-    prev_masked_memory = masked_memory.expand_by_beam(beam_size)
+    finished_penalty=Variable(tt.FloatTensor(batch_size*beam_size).fill_(0)).view(batch_size, beam_size)
+    lengths_penalty=Variable(tt.LongTensor(batch_size*beam_size).fill_(0)).view(batch_size, beam_size)
 
+    prev_masked_memory = masked_memory.expand_by_beam(beam_size)
     attn_list = [] if return_attention else None
     for step in range(max_decoder_length):
         hidden, logits = decode_fn(prev_tokens, prev_hidden,
@@ -97,10 +199,19 @@ def beam_search_(batch_size,
         # indices: batch size x beam size
         # Each entry is in [0, beam_size * vocab_size)
         actual_beam_size = min(beam_size, log_probs_flat.size(1))
-        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
-        # prev_tokens: batch_size * beam size
-        # Each entry indicates which token should be added to each beam.
-        prev_tokens = (indices % logit_size).view(-1)
+        sizes=(batch_size,actual_beam_size,logit_size)
+
+        if use_length_penalty:
+            prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty = Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty)
+
+        else:
+
+            prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
+        
+            # prev_tokens: batch_size * beam size
+            # Each entry indicates which token should be added to each beam.
+            prev_tokens = (indices % logit_size).view(-1)
+
         # This takes a lot of time... about 50% of the whole thing.
         indices = indices.cpu()
         # k_idx: batch size x beam size
