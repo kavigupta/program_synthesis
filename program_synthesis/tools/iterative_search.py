@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from itertools import count
 
+import torch
+
 from datasets.executor import evaluate_code
 from datasets.karel import mutation
 
@@ -102,7 +104,8 @@ class IterativeSearch:
         egs, cands = zip(*items)
         batch = self.update_wrong_code_and_pack(egs, cands, add_trace=True,
                                                 batch_processor=self.overfit_model.batch_processor(for_eval=True))
-        return self.overfit_model.inference(batch)
+        with torch.no_grad():
+            return self.overfit_model.inference(batch)
 
     def select_best_code_per(self, original_batch, finalized_candidates):
         flattened_candidates = []
