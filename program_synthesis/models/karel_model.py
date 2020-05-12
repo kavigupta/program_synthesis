@@ -197,7 +197,12 @@ class KarelLGRLModel(BaseKarelModel):
             self.model.decode_token,
             self.args.max_beam_trees,
             cuda=self.args.cuda,
-            max_decoder_length=self.args.max_decoder_length)
+            max_decoder_length=self.args.max_decoder_length,
+            return_attention=False,
+            return_beam_search_result=False,
+            differentiable=False,
+            use_length_penalty=self.args.use_length_penalty,
+            factor = self.args.length_penalty_factor)
 
         return self._try_sequences(self.vocab, sequences, input_grids,
                                    output_grids, self.args.max_beam_trees)
@@ -311,7 +316,9 @@ class KarelLGRLRefineModel(BaseKarelModel):
             max_decoder_length=self.args.max_decoder_length,
             return_beam_search_result=True,
             volatile=False,
-            differentiable=True
+            differentiable=True,
+            use_length_penalty=self.args.use_length_penalty,
+            factor=self.args.length_penalty_factor
         )
         output_code = self.model.decoder.postprocess_output([[x.sequence for x in y] for y in sequences], memory)
         all_logits = []
@@ -368,7 +375,12 @@ class KarelLGRLRefineModel(BaseKarelModel):
             self.model.decode_token,
             self.args.max_beam_trees,
             cuda=self.args.cuda,
-            max_decoder_length=self.args.max_decoder_length)
+            max_decoder_length=self.args.max_decoder_length,
+            return_attention=False,
+            return_beam_search_result=False,
+            differentiable=False,
+            use_length_penalty=self.args.use_length_penalty,
+            factor = self.args.length_penalty_factor)
 
         sequences = self.model.decoder.postprocess_output(sequences, memory)
 

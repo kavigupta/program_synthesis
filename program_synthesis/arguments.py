@@ -131,6 +131,8 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--max_decoder_length', type=int, default=100)
     infer_group.add_argument('--max_beam_trees', type=int, default=1)#100
     infer_group.add_argument('--max_beam_iter', type=int, default=1000)
+    infer_group.add_argument('--use_length_penalty', action='store_true', default=False)
+    infer_group.add_argument('--length_penalty_factor', type=float, default=0.7)
     infer_group.add_argument('--max_eval_trials', type=int)
     infer_group.add_argument('--min_prob_threshold', type=float, default=1e-5)
     infer_group.add_argument('--search-bfs', action='store_true', default=True)

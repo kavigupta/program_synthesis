@@ -74,7 +74,7 @@ def hyp_score(log_probs, sequence_lengths, penalty_factor):
     
     return score, length_penality_
 
-def Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty):
+def Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty, factor):
 
     """
     Calculate prev_probs using the length penalty
@@ -101,7 +101,7 @@ def Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, fi
         curr_scores, lp = hyp_score(
         log_probs=curr_scores,
         sequence_lengths=new_prediction_lengths,
-        penalty_factor=0.6)
+        penalty_factor=factor)
         curr_scores = curr_scores.view(batch_size, -1)
 
         # Recover log probs
@@ -161,7 +161,8 @@ def beam_search_(batch_size,
                 return_attention=False,
                 return_beam_search_result=False,
                 differentiable=False,
-                use_length_penalty=False):
+                use_length_penalty=False,
+                factor = 0.7):
     # enc: batch size x hidden size
     # memory: batch size x sequence length x hidden size
     tt = torch.cuda if cuda else torch
@@ -202,7 +203,7 @@ def beam_search_(batch_size,
         sizes=(batch_size,actual_beam_size,logit_size)
 
         if use_length_penalty:
-            prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty = Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty)
+            prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty = Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty, factor)
 
         else:
 
