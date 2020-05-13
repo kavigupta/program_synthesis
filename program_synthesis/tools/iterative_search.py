@@ -110,6 +110,8 @@ class IterativeSearch:
         indices_per_original = []
         for example, candidates in zip(original_batch.orig_examples, finalized_candidates):
             indices_per_original.append([])
+            if len(candidates) == 1:
+                continue
             for candidate in candidates:
                 indices_per_original[-1].append(len(flattened_examples))
                 flattened_examples.append(example)
@@ -120,6 +122,9 @@ class IterativeSearch:
             results += self.run_overfit_model(items).cpu().detach().numpy().tolist()
         best_code = []
         for idxs, candidates in zip(indices_per_original, finalized_candidates):
+            if len(candidates) == 1:
+                best_code.append(candidates[0])
+                continue
             best_idx = max(range(len(candidates)), key=lambda i: results[idxs[i]])
             best_code.append(candidates[best_idx])
         return best_code
