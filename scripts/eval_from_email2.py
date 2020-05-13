@@ -19,6 +19,12 @@ def valid_checkpoints():
             continue
         if "finetuned-rl-1e-5-use-heldout," in logdir:
             continue
+        short_name = logdir.split("/")[-1].split(",")[0]
+        if "-" in short_name:
+            *stem, number = short_name.split("-")
+            if stem == ['vanilla'] or stem == ['aggregate', 'with', 'io']:
+                if number in "123":
+                    continue
         numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
@@ -74,7 +80,7 @@ def valid_modes_and_params():
 
 def overfit_models_to_use():
     models = [
-        (2000, "overfit-vanilla-slow-split"),
+        #(2000, "overfit-vanilla-slow-split"),
         (51_000, "overfit-awoi-all-beams-balanced-load-debugger"),
         #(2000, "overfit-aggregate-with-io-slow-split")
     ]
