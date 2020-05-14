@@ -178,7 +178,7 @@ class GreedyStrategy(Strategy):
                 return 'accept', considered
             unseen.append((res['correct'], considered))
         if not unseen:
-            self.seen.add(candidates[0])
+            self.seen.add(tuple(candidates[0]))
             return 'accept', candidates[0]
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
