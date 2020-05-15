@@ -1608,7 +1608,8 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                     end_mask.append(1)
                 # source_len is 1 longer than in reality because we appended
                 # </s> to each source sequence.
-                elif loc == source_len - 1:
+                # tolerate source_len == 1 to handle situation when the ref code is ()
+                elif loc == source_len - 1 or source_len == 1:
                     end_mask.append(1)
                 elif loc >= source_len:
                     raise ValueError(loc)
