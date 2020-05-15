@@ -122,7 +122,7 @@ class KarelExecutor(object):
                 compiled = self.code_cache[code]
             compiled()
         except KarelSyntaxError:
-            raise ExecutorSyntaxException
+            raise ExecutorSyntaxException(str(code))
         except (TimeoutError, ExecutorRuntimeException) as e:
             if not record_trace:
                 if isinstance(e, TimeoutError):
