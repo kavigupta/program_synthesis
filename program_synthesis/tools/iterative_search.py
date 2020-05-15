@@ -207,7 +207,7 @@ class BestFirstSearch(Strategy):
                 decision = 'accept' if n_correct == 5 else 'expand'
                 return decision, self.by_number_correct[n_correct].pop(0)
 
-        return 'accept', tuple(candidates[0])
+        return 'expand', tuple(candidates[0])
 
 
 class DiversitySearch(Strategy):
@@ -280,4 +280,4 @@ class DiversitySearch(Strategy):
                 else:
                     return decision, self.by_number_correct[n_correct].pop(0)
 
-        return 'accept', tuple(candidates[0])
+        return 'expand', tuple(candidates[0])
