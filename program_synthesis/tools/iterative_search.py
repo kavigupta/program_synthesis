@@ -51,13 +51,14 @@ class IterativeSearch:
             new_wrong_code = []
             new_batch = []
             for idx, decision in enumerate(decisions):
-                give_up = num_inferences == self.time_limit and not finalized_candidates[index_mapping[idx]]
+                give_up = (num_inferences == self.time_limit or decision[0] == 'give_up') and not finalized_candidates[index_mapping[idx]]
                 if decision[0] == 'accept' or give_up:
                     finalized_candidates[index_mapping[idx]].append(decision[1])
 
-                if decision[0] != 'expand' and self.overfit_model is None:
+                if decision[0] == 'accept' and self.overfit_model is None or decision[0] == 'give_up':
                     # only mark something done if the overfit model is not in effect,
                     # otherwise we keep going until we run out of time
+                    # except in the case where we give up, in which case we stop immediately to avoid syntax errors
                     done[index_mapping[idx]] = True
                 else:
                     attempts[index_mapping[idx]].append(decision[1])
@@ -179,7 +180,7 @@ class GreedyStrategy(Strategy):
             unseen.append((res['correct'], considered))
         if not unseen:
             self.seen.add(tuple(candidates[0]))
-            return 'accept', candidates[0]
+            return 'give_up', candidates[0]
         unseen.sort(reverse=True)
         self.seen.add(unseen[0][1])
         return 'expand', unseen[0][1]
@@ -207,7 +208,7 @@ class BestFirstSearch(Strategy):
                 decision = 'accept' if n_correct == 5 else 'expand'
                 return decision, self.by_number_correct[n_correct].pop(0)
 
-        return 'expand', tuple(candidates[0])
+        return 'give_up', tuple(candidates[0])
 
 
 class DiversitySearch(Strategy):
@@ -280,4 +281,4 @@ class DiversitySearch(Strategy):
                 else:
                     return decision, self.by_number_correct[n_correct].pop(0)
 
-        return 'expand', tuple(candidates[0])
+        return 'give_up', tuple(candidates[0])
