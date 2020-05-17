@@ -1608,11 +1608,11 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                     end_mask.append(1)
                 # source_len is 1 longer than in reality because we appended
                 # </s> to each source sequence.
-                # tolerate source_len == 1 to handle situation when the ref code is ()
                 elif loc == source_len - 1 or source_len == 1:
                     end_mask.append(1)
                 elif loc >= source_len:
-                    raise ValueError(loc)
+                    print("Warning: loc ({}) >= source_len ({})".format(loc, source_len))
+                    end_mask.append(1)
                 else:
                     end_mask.append(0)
             logits.data.masked_fill_(self.end_mask[end_mask], float('-inf'))
