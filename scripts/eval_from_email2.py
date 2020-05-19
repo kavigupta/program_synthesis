@@ -58,6 +58,8 @@ def valid_modes_and_params():
                 yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25:
                     for strategy in 'greedy', 'best_first':
+                        if strategy == 'greedy' and limit == 1:
+                            continue # greedy and best first are exactly the same for 1 step
                         when = 'always' if strategy == 'best_first' else 'sometimes'
                         for extra in '', '--iterative-search-start-with-beams':
                             if extra != '':
