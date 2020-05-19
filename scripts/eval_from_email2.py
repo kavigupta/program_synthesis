@@ -38,7 +38,8 @@ def valid_checkpoints():
             ckpt_number = int(ckpt[-8:])
             cm100 = ckpt_number - 100
             cm1000 = ckpt_number - 1000
-            if (cm100 % 25000 != 0 and cm1000 % 25000 != 0) or ckpt_number < 1000:
+            interval = 25000 if logdir.startswith("logdirs-overfit") else 10000
+            if (cm100 % interval != 0 and cm1000 % interval != 0) or ckpt_number < 1000:
                 continue
             numbers.append(ckpt_number)
         numbers.sort(reverse=True)
