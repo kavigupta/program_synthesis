@@ -180,7 +180,7 @@ def main(args):
             if when == 'always':
                 priority -= 1
             if "overfit=" in command:
-                priority -= 1
+                priority += 100
             by_priority.append((priority, command))
     by_priority.sort()
     print_classes(by_priority)
