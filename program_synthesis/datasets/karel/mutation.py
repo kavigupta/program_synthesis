@@ -485,6 +485,39 @@ def equal_halves(items, predicate, seed=0):
     return [items[i] for i in all_idx]
 
 
+class KarelGoldReplaceMutator:
+    @classmethod
+    def from_path(cls, path, include_original=False):
+        if path is None:
+            return None
+        with open(path) as f:
+            return cls(json.load(f), include_original)
+
+    def __init__(self, mapping, include_original):
+        self.mapping = mapping
+        self.include_original = include_original
+
+    def filter_index(self, index, get_example):
+        if self.include_original:
+            return index
+        print("Pre-gold  replace filtering {}".format(len(index)))
+        index = [idx for i, idx in enumerate(index) if self._code_for(get_example(i))]
+        print("Post-gold replace filtering {}".format(len(index)))
+        return index
+
+    def _code_for(self, example):
+        return [code for _model, code in self.mapping.get(example.guid, [])]
+
+    def __call__(self, example):
+        code_seqs = self._code_for(example)
+        if not code_seqs:
+            assert self.include_original
+            return example
+        example = copy.copy(example)
+        example.code_sequence = min(code_seqs, key=len)
+        return example
+
+
 # Definition of Action Parameters
 
 Action = collections.namedtuple('Action', ['id', 'parameters'])

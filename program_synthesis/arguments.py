@@ -154,6 +154,9 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--karel-mutate-ref', action='store_true')
     infer_group.add_argument('--karel-mutate-n-dist', default='1,2,3')
 
+    infer_group.add_argument('--karel-gold-replace-train',
+                             help="dictionary d where d[guid][i] == (model_generating_program, program)")
+
     runtime_group = parser.add_argument_group('runtime')
     runtime_group.add_argument(
         '--restore-map-to-cpu', action='store_true')

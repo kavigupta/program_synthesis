@@ -15,7 +15,7 @@ import torch.utils.data
 import data
 from . import executor
 from . import stats
-from .karel.mutation import KarelExampleMutator, KarelOutputRefExampleMutator
+from .karel.mutation import KarelExampleMutator, KarelOutputRefExampleMutator, KarelGoldReplaceMutator
 
 
 Schema = collections.namedtuple("Schema", ["args", "return_type"])
@@ -403,10 +403,11 @@ class NearDataset(Dataset):
 
 class KarelTorchDataset(torch.utils.data.Dataset):
 
-    def __init__(self, filename, mutator=lambda x: x, incorrect_mutator=None):
+    def __init__(self, filename, mutator=lambda x: x, incorrect_mutator=None, replace_gold=None):
         self.filename = filename
         self.mutator = mutator
         self.incorrect_mutator = incorrect_mutator
+        self.replace_gold = replace_gold
 
         self.file = None
         self.index = []
@@ -421,17 +422,26 @@ class KarelTorchDataset(torch.utils.data.Dataset):
         if incorrect_mutator is not None:
             self.index = incorrect_mutator.filter_index(self.index)
 
+        if replace_gold is not None:
+            self.index = replace_gold.filter_index(self.index, self._get_raw_example)
+
     def __len__(self):
         return len(self.index)
 
     def __getitem__(self, idx):
+        example = self._get_raw_example(idx)
+        if self.incorrect_mutator is not None:
+            example = self.incorrect_mutator(idx, example)
+        if self.replace_gold is not None:
+            example = self.replace_gold(example)
+        example = self.mutator(example)
+        return example
+
+    def _get_raw_example(self, idx):
         if self.file is None:
             self.file = open(self.filename, "rb")
         self.file.seek(self.index[idx])
         example = KarelExample.from_dict(pickle.load(self.file, encoding='latin1'))
-        if self.incorrect_mutator is not None:
-            example = self.incorrect_mutator(idx, example)
-        example = self.mutator(example)
         return example
 
 
@@ -515,7 +525,8 @@ def get_karel_dataset(args, model, eval_on_train=False):
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace, mode, for_eval=eval_on_train, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams)),
+            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace, mode, for_eval=eval_on_train, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams),
+            KarelGoldReplaceMutator.from_path(args.karel_gold_replace_train)),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=eval_on_train),
         num_workers=0 if args.load_sync else 4,
