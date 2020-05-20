@@ -20,11 +20,8 @@ def valid_checkpoints():
         if "finetuned-rl-1e-5-use-heldout," in logdir:
             continue
         short_name = logdir.split("/")[-1].split(",")[0]
-        if "-" in short_name:
-            *stem, number = short_name.split("-")
-            if stem == ['vanilla'] or stem == ['aggregate', 'with', 'io']:
-                if number in "123":
-                    continue
+        if any(short_name.startswith("%s-%s" % (a, b)) for a in ("vanilla", "aggregate-with-io") for b in "123"):
+            continue
         numbers = []
         for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
             try:
