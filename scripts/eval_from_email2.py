@@ -33,16 +33,21 @@ def valid_checkpoints():
                 # these are deleted by the time an evaluation can be run :(
                 continue
             ckpt_number = int(ckpt[-8:])
-            cm100 = ckpt_number - 100
-            cm1000 = ckpt_number - 1000
-            interval = 25000 if logdir.startswith("logdirs-overfit") else 10000
-            if (cm100 % interval != 0 and cm1000 % interval != 0) or ckpt_number < 1000:
+            if not is_multiple(ckpt_number, 5000) or ckpt_number < 1000:
                 continue
             numbers.append(ckpt_number)
+
+        if len([x for x in numbers if is_multiple(x, 25000)]) >= 10:
+            numbers = [x for x in numbers if is_multiple(x, 25000)]
+        else:
+            numbers = [x for x in numbers if is_multiple(x, 10000)]
+
         numbers.sort(reverse=True)
         for idx, ckpt_number in enumerate(numbers):
             yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
 
+def is_multiple(ckpt_number, interval):
+    return (ckpt_number - 100) % interval == 0 or (ckpt_number - 1000) % interval == 0
 
 def valid_modes_and_params():
     for mode in 'train', 'eval', 'real', 'realtrain':
