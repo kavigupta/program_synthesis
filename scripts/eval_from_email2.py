@@ -65,8 +65,8 @@ def valid_modes_and_params():
                         when = 'always' if strategy == 'best_first' else 'sometimes'
                         for extra in '', '--iterative-search-start-with-beams':
                             if extra != '':
-                                if strategy != 'best_first':
-                                    continue
+#                                 if strategy != 'best_first':
+#                                     continue
                                 if model == 'nearai':
                                     continue
                             render_extra = '' if extra == '' else ',,start-with-beams'
