@@ -22,20 +22,8 @@ def valid_checkpoints():
         short_name = logdir.split("/")[-1].split(",")[0]
         if any(short_name.startswith("%s-%s" % (a, b)) for a in ("vanilla", "aggregate-with-io") for b in "123"):
             continue
-        numbers = []
-        for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
-            try:
-                time_delta = time.time() - os.path.getmtime(ckpt)
-            except FileNotFoundError:
-                continue
-            if time_delta < 60 * 60:
-                # ignore really recent checkpoints (last hour)
-                # these are deleted by the time an evaluation can be run :(
-                continue
-            ckpt_number = int(ckpt[-8:])
-            if not is_multiple(ckpt_number, 5000) or ckpt_number < 1000:
-                continue
-            numbers.append(ckpt_number)
+
+        numbers = get_checkpoint_numbers(logdir)
 
         if len([x for x in numbers if is_multiple(x, 25000)]) >= 10:
             numbers = [x for x in numbers if is_multiple(x, 25000)]
@@ -46,8 +34,28 @@ def valid_checkpoints():
         for idx, ckpt_number in enumerate(numbers):
             yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
 
+
+def get_checkpoint_numbers(logdir):
+    numbers = []
+    for ckpt in sorted(glob.glob(logdir + '/checkpoint-????????')):
+        try:
+            time_delta = time.time() - os.path.getmtime(ckpt)
+        except FileNotFoundError:
+            continue
+        if time_delta < 60 * 60:
+            # ignore really recent checkpoints (last hour)
+            # these are deleted by the time an evaluation can be run :(
+            continue
+        ckpt_number = int(ckpt[-8:])
+        if not is_multiple(ckpt_number, 5000) or ckpt_number < 1000:
+            continue
+        numbers.append(ckpt_number)
+    return numbers
+
+
 def is_multiple(ckpt_number, interval):
     return (ckpt_number - 100) % interval == 0 or (ckpt_number - 1000) % interval == 0
+
 
 def valid_modes_and_params():
     for mode in 'train', 'eval', 'real', 'realtrain':
