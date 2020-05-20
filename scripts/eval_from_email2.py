@@ -25,14 +25,17 @@ def valid_checkpoints():
 
         numbers = get_checkpoint_numbers(logdir)
 
-        if len([x for x in numbers if is_multiple(x, 25000)]) >= 10:
-            numbers = [x for x in numbers if is_multiple(x, 25000)]
-        else:
-            numbers = [x for x in numbers if is_multiple(x, 10000)]
+        yield from valid_checkpoints_for_logdir(logdir, numbers)
 
-        numbers.sort(reverse=True)
-        for idx, ckpt_number in enumerate(numbers):
-            yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
+
+def valid_checkpoints_for_logdir(logdir, numbers):
+    if len([x for x in numbers if is_multiple(x, 25000)]) >= 10:
+        numbers = [x for x in numbers if is_multiple(x, 25000)]
+    else:
+        numbers = [x for x in numbers if is_multiple(x, 10000)]
+    numbers.sort(reverse=True)
+    for idx, ckpt_number in enumerate(numbers):
+        yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
 
 
 def get_checkpoint_numbers(logdir):
