@@ -5,11 +5,14 @@ import sys
 import os.path
 import time
 import argparse
+import shlex
+import re
 
 from collections import Counter
 
 
 def valid_checkpoints():
+    ensemble_names = set()
     for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
@@ -21,11 +24,22 @@ def valid_checkpoints():
             continue
         short_name = logdir.split("/")[-1].split(",")[0]
         if any(short_name.startswith("%s-%s" % (a, b)) for a in ("vanilla", "aggregate-with-io") for b in "123"):
+            ensemble_names.add(re.sub("(vanilla|aggregate-with-io)-[123]", "\\1-#", short_name))
             continue
 
         numbers = get_checkpoint_numbers(logdir)
 
         yield from valid_checkpoints_for_logdir(logdir, numbers)
+
+    for name in ensemble_names:
+        logdir = "logdirs/" + name + ",*"
+        actual_logdirs = [x for number in "123" for x in glob.glob(logdir.replace("#", number))]
+        checkpoints_per = [set(get_checkpoint_numbers(logdir)) for logdir in actual_logdirs]
+        common_checkpoints = checkpoints_per[0]
+        for checkpoints in checkpoints_per[1:]:
+            common_checkpoints &= checkpoints
+        common_checkpoints = sorted(common_checkpoints)
+        yield from valid_checkpoints_for_logdir(logdir, common_checkpoints)
 
 
 def valid_checkpoints_for_logdir(logdir, numbers):
@@ -140,9 +154,10 @@ def main(args):
                 if not is_overfit_model:
                     continue
 
-            output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(logdir=logdir,
-                                                                                   dist=render_param,
-                                                                                   step=ckpt_number, mode=mode)
+            output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(
+                logdir=logdir.replace("#", "123").replace("*", "dovetail"),
+                dist=render_param,
+                step=ckpt_number, mode=mode)
             if already_executed(output_path):
                 continue
 
@@ -153,8 +168,8 @@ def main(args):
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
                 model_type='karel-lgrl-overfit' if is_overfit_model else 'karel-lgrl-ref',
-                batch_size=batch_size,
-                step=ckpt_number, logdir=logdir,
+                batch_size=batch_size // 3 if '#' in logdir else batch_size,
+                step=ckpt_number, logdir=shlex.quote(logdir),
                 output_path=output_path
             )
 
@@ -174,6 +189,11 @@ def main(args):
             command += ' '
             if mode == 'train' or mode == 'realtrain':
                 command += '--eval-train --limit 2500'
+
+            command += ' '
+
+            if '#' in logdir:
+                command += ' --ensemble-parameters 1 2 3 --ensemble-mode dovetail'
 
             command += ' '
 
