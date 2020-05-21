@@ -219,49 +219,13 @@ class DiversitySearch(Strategy):
     from ones expanded in the past. see res[‘individual’] 
 
     """
-    def __init__(self, item, past=[]):
+    def __init__(self, item):
         self.seen = set()
+        self.seen_patterns = defaultdict(int)
         self.by_number_correct = defaultdict(list)
-        self.individual_correct = defaultdict(list)
-        # should it contain beam number and res['individual']?
-
-    def calculate_key(self, choose_idx, types_correct, corr_idx, corr_idx_compare):
-        """
-        Calculat
-        """
-        set1_elem = choose_idx[types_correct[corr_idx]]
-        set2_elem = choose_idx[types_correct[corr_idx_compare]]
-        diff1 = len(np.setdiff1d(set1_elem, set2_elem))
-        diff2 = len(np.setdiff1d(set2_elem, set1_elem))
-        key = int(diff1+diff2)
-        return key
-
-    def diversify_decision(self, code, correct):
-        # check which of the 5 tests are passed
-        choose_idx = np.arange(len(correct[0][1]))
-        types_correct = [np.array(corr[1])>0 for corr in correct]
-        
-        # if only 1 beam return that
-        if len(types_correct)==1:
-            return 'expand', code.pop(0)
-
-        # compare using the set difference and pick the one that is most different
-        order = defaultdict(list)
-        for corr_idx, corr in enumerate(correct):
-            for corr_idx_compare, corr_compare in enumerate(correct):
-                if corr_idx_compare<=corr_idx:
-                    continue
-                key = self.calculate_key(choose_idx, types_correct, corr_idx, corr_idx_compare)
-                order[key].append(corr_idx)
-        # remove duplicates
-        for key in order.keys():
-            order[key] = list(set(order[key]))
-        best_choice_idx = np.array(list(order.keys())).max()
-        
-        return 'expand', code[np.random.choice(order[best_choice_idx],1)[0]]
 
     def decide(self, candidates, evaluate):
-        for candidate_idx, considered in enumerate(candidates):
+        for considered in candidates:
             considered = tuple(considered)
             if considered in self.seen:
                 continue
@@ -269,16 +233,18 @@ class DiversitySearch(Strategy):
             if not valid(considered, res):
                 continue
             self.seen.add(considered)
+            self.seen_patterns[tuple(res['individual'])] += 1
             assert res['total'] == 5
-            self.by_number_correct[res['correct']].append(considered)
-            self.individual_correct[res['correct']].append([candidate_idx,res['individual']])
+            self.by_number_correct[res['correct']].append((considered, res['individual']))
 
         for n_correct in sorted(self.by_number_correct, reverse=True):
             if self.by_number_correct[n_correct]:
                 decision = 'accept' if n_correct == 5 else 'expand'
-                if decision == 'expand':
-                    self.diversify_decision(self.by_number_correct[n_correct], self.individual_correct[n_correct])
-                else:
-                    return decision, self.by_number_correct[n_correct].pop(0)
+                return decision, self.diverse_decision(self.by_number_correct[n_correct])
 
         return 'give_up', tuple(candidates[0])
+
+    def diverse_decision(self, items):
+        to_use_idx = min(range(len(items)), key=lambda i: self.seen_patterns[tuple(items[i][1])])
+        to_use, _ = items.pop(to_use_idx)
+        return to_use
