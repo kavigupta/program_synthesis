@@ -1,4 +1,5 @@
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -239,6 +240,7 @@ def main(args):
             by_priority.append((priority, command))
     by_priority.sort()
     print_classes(by_priority)
+    by_priority = filter_hash(by_priority, args.bin_count, args.bins)
     assert args.max_commands is None or args.priority is None, "cannot specify both a maximal number of commands and a maximal priority"
     if args.max_commands is not None:
         by_priority = by_priority[:args.max_commands]
@@ -254,10 +256,31 @@ def print_classes(by_priority):
         print(clas, count, file=sys.stderr)
     print(file=sys.stderr)
 
+def hashnum(s):
+    mat = re.match(r".*--report-path\s*(\S*).*", s)
+    assert mat
+    s = mat.group(1)
+    m = hashlib.sha256()
+    m.update(s.encode('utf-8'))
+    return int(m.hexdigest(), 16)
+
+def filter_hash(by_priority, bin_count, bins):
+    if bin_count is None:
+        assert bins is None
+        return by_priority
+    bins = [int(x) for x in bins.split(",")]
+    assert all(0 <= x < bin_count for x in bins)
+    by_priority = [(x, y) for x, y in by_priority if hashnum(y) % bin_count in bins]
+    print("after hash filtering", file=sys.stderr)
+    print_classes(by_priority)
+    return by_priority
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-commands', type=int, default=None)
 parser.add_argument('--cpu', action='store_true')
 parser.add_argument('--batch-size')
 parser.add_argument('--priority', type=int, default=None)
+parser.add_argument('--bin-count', type=int, default=None)
+parser.add_argument('--bins', type=str, default=None)
 
 main(parser.parse_args())
