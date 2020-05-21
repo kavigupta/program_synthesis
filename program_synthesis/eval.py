@@ -1,5 +1,7 @@
 import argparse
+import copy
 import functools
+import glob
 import sys
 import os
 import json
@@ -15,17 +17,40 @@ import models
 import arguments
 
 from tools.iterative_search import IterativeSearch, Strategy
+from tools.ensembling import ensembled_inference
 
 from models.karel_model import KarelLGRLOverfitModel
+
 
 
 def evaluate(args):
     print("Evaluation:")
     print("\tModel type: %s\n\tModel path: %s" % (args.model_type, args.model_dir))
-    tools.restore_args(args)
-    arguments.backport_default_args(args)
-    datasets.set_vocab(args)
-    m = models.get_model(args)
+
+    if args.ensemble_parameters:
+        assert '#' in args.model_dir
+        args_per_model = []
+        for parameter in args.ensemble_parameters:
+            globstring = args.model_dir.replace("#", parameter)
+            paths = glob.glob(globstring)
+            assert paths, globstring
+            for model_dir in paths:
+                print(model_dir)
+                assert os.path.exists(model_dir), model_dir
+                args_for = copy.deepcopy(args)
+                args_for.model_dir = model_dir
+                args_per_model.append(args_for)
+    else:
+        args_per_model = [copy.deepcopy(args)]
+
+    for a in args_per_model:
+        tools.restore_args(a)
+        arguments.backport_default_args(a)
+        datasets.set_vocab(a)
+
+    args = args_per_model[0]
+
+    ms = [models.get_model(a) for a in args_per_model]
 
     if args.iterative_search_use_overfit_model is not None:
         assert args.iterative_search is not None, "using an overfit model only makes sense if iterative search is being used"
@@ -45,21 +70,23 @@ def evaluate(args):
         overfit_model = None
 
     if args.eval_final:
-        eval_dataset = datasets.get_eval_final_dataset(args, m)
+        eval_dataset = datasets.get_eval_final_dataset(args, ms[0])
     elif args.eval_train:
-        eval_dataset, _ = datasets.get_dataset(args, m, eval_on_train=True)
+        eval_dataset, _ = datasets.get_dataset(args, ms[0], eval_on_train=True)
     else:
-        eval_dataset = datasets.get_eval_dataset(args, m)
-    if m.last_step == 0:
+        eval_dataset = datasets.get_eval_dataset(args, ms[0])
+    if any(m.last_step == 0 for m in ms):
         raise ValueError('Attempting to evaluate on untrained model')
-    m.model.eval()
+    for m in ms:
+        m.model.eval()
     current_executor = executor.get_executor(args)()
     if args.example_id is not None:
         eval_dataset.data = [eval_dataset.task[args.example_id]]
 
-    inference = m.inference
+    inference = ensembled_inference([m.inference for m in ms], args.ensemble_mode)
 
-    if isinstance(m, KarelLGRLOverfitModel):
+    if isinstance(ms[0], KarelLGRLOverfitModel):
+        assert len(ms) == 1
         evaluation.run_overfit_eval(
             eval_dataset, inference,
             args.report_path,
@@ -71,7 +98,7 @@ def evaluate(args):
         inference = IterativeSearch(inference,
                                     Strategy.get(args.iterative_search),
                                     current_executor,
-                                    args.karel_trace_enc != 'none', m.batch_processor(for_eval=True),
+                                    args.karel_trace_enc != 'none', ms[0].batch_processor(for_eval=True),
                                     start_with_beams=args.iterative_search_start_with_beams,
                                     time_limit=args.iterative_search_step_limit,
                                     overfit_model=overfit_model)

@@ -157,6 +157,13 @@ def get_arg_parser(title, mode):
     infer_group.add_argument('--karel-gold-replace-train',
                              help="dictionary d where d[guid][i] == (model_generating_program, program)")
 
+    infer_group.add_argument('--ensemble-parameters', nargs='*',
+                             help="If provided, the character '#' in the model path"
+                                  " will be replaced by each of the values provided."
+                                  " e.g., --model_dir 'logdirs/hi#' --ensemble-parameters 1 2 3"
+                                  " means to use the models logdirs/hi1, logdirs/hi2, logdirs/hi3")
+    infer_group.add_argument('--ensemble-mode', choices=['none', 'dovetail'], default='none')
+
     runtime_group = parser.add_argument_group('runtime')
     runtime_group.add_argument(
         '--restore-map-to-cpu', action='store_true')
