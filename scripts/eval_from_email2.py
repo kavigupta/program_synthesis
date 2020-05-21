@@ -48,8 +48,22 @@ def valid_checkpoints_for_logdir(logdir, numbers):
     else:
         numbers = [x for x in numbers if is_multiple(x, 10000)]
     numbers.sort(reverse=True)
-    for idx, ckpt_number in enumerate(numbers):
-        yield (logdir, ckpt_number), (idx, len(numbers)), "overfit" in logdir.split("/")[0]
+
+    for chunk in chunked(enumerate(numbers), len(numbers) // 5):
+        for idx, ckpt_number in chunk:
+            yield (logdir, ckpt_number), (idx, len(numbers), chunk), "overfit" in logdir.split("/")[0]
+
+
+def chunked(lst, count):
+    count = max(count, 1)
+    out = []
+    for x in lst:
+        out.append(x)
+        if len(out) == count:
+            yield out
+            out = []
+    if out:
+        yield out
 
 
 def get_checkpoint_numbers(logdir):
@@ -64,7 +78,7 @@ def get_checkpoint_numbers(logdir):
             # these are deleted by the time an evaluation can be run :(
             continue
         ckpt_number = int(ckpt[-8:])
-        if not is_multiple(ckpt_number, 5000) or ckpt_number < 1000:
+        if not is_multiple(ckpt_number, 5000) or ckpt_number <= 1000:
             continue
         numbers.append(ckpt_number)
     return numbers
@@ -141,7 +155,8 @@ def main(args):
     else:
         batch_size = 16 if args.cpu else 64
     by_priority = []
-    for (logdir, ckpt_number), (index_last, num_checkpoints), is_overfit_model in valid_checkpoints():
+    planned = set()
+    for (logdir, ckpt_number), (index_last, num_checkpoints, chunk), is_overfit_model in valid_checkpoints():
         for (mode, param, render_param), when, extra_args in valid_modes_and_params():
             if is_overfit_model:
                 if mode != 'real' and mode != 'realtrain':
@@ -154,12 +169,13 @@ def main(args):
                 if not is_overfit_model:
                     continue
 
-            output_path = "{logdir}/report-dev-m{dist}-{step}-{mode}.jsonl".format(
+            output_path_pattern = "{logdir}/report-dev-m{dist}-%s-{mode}.jsonl".format(
                 logdir=logdir.replace("#", "123").replace("*", "dovetail"),
-                dist=render_param,
-                step=ckpt_number, mode=mode)
+                dist=render_param, mode=mode)
+            output_path = output_path_pattern % ckpt_number
             if already_executed(output_path):
                 continue
+
 
             command = ('python -u program_synthesis/eval.py --model_type {model_type} --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
@@ -202,9 +218,9 @@ def main(args):
 
             if is_overfit_model:
                 priority = 1
-            elif index_last == 0:
+            elif index_last == 0 and is_multiple(ckpt_number, 25000):
                 priority = 11
-            elif num_checkpoints < 5 or index_last % (num_checkpoints // 5) == 0:
+            elif not any(already_executed(output_path_pattern % other_step) or output_path_pattern % other_step in planned for _, other_step in chunk):
                 priority = 21
             else:
                 priority = 100
@@ -212,6 +228,9 @@ def main(args):
                 priority -= 1
             if "overfit=" in command:
                 priority += 100
+            if '#' in logdir:
+                priority += 30
+            planned.add(output_path)
             by_priority.append((priority, command))
     by_priority.sort()
     print_classes(by_priority)
