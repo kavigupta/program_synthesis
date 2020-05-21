@@ -71,6 +71,10 @@ class EvalReport(object):
         else:
             timestamp = int(time.time())
             report_path = 'reports/report-%s-%s.json' % (self.tag, timestamp)
+        try:
+            os.makedirs(os.path.dirname(report_path))
+        except FileExistsError:
+            pass
         with open(report_path, 'w') as f:
             f.write(json.dumps({**self.stats, 'done' : done}) + "\n")
             for example, res, st in self.report:
