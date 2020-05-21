@@ -3,6 +3,7 @@ import math
 import sys
 import os
 import time
+from itertools import count
 
 import numpy as np
 
@@ -53,6 +54,27 @@ class InferenceResult(object):
             'code_sequence': self.code_sequence,
         }
 
+    @staticmethod
+    def dovetail(inference_results):
+        """
+        Combines several inference results together via dovetailing. Only works if the `info` contains
+        beams of the form info['trees_checked'], and info['candidates'] == [list of candidates,,,]
+        """
+        assert inference_results
+        code_tree = inference_results[0].code_tree
+        code_sequence = inference_results[0].code_sequence
+        assert all(res.info.keys() == {'trees_checked', 'candidates'} for res in inference_results)
+        candidates = []
+        for i in count():
+            done = True
+            for res in inference_results:
+                if i < len(res.info['candidates']):
+                    candidates.append(res.info['candidates'][i])
+                    done = False
+            if done:
+                break
+        trees_checked = sum(res.info['trees_checked'] for res in inference_results)
+        return InferenceResult(code_tree=code_tree, code_sequence=code_sequence, info=dict(trees_checked=trees_checked, candidates=candidates))
 
 class BaseModel(object):
 
