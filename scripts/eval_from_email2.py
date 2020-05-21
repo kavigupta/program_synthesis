@@ -176,6 +176,11 @@ def main(args):
             if already_executed(output_path):
                 continue
 
+            used_batch_size = int(batch_size)
+            if '#' in logdir:
+                used_batch_size //= 3
+            if logdir.split("/")[-1].startswith("vanilla"):
+                used_batch_size *= 2
 
             command = ('python -u program_synthesis/eval.py --model_type {model_type} --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
@@ -184,7 +189,7 @@ def main(args):
                        '--report-path {output_path} '
                        '--hide-example-info ').format(
                 model_type='karel-lgrl-overfit' if is_overfit_model else 'karel-lgrl-ref',
-                batch_size=batch_size // 3 if '#' in logdir else batch_size,
+                batch_size=used_batch_size,
                 step=ckpt_number, logdir=shlex.quote(logdir),
                 output_path=output_path
             )
