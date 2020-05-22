@@ -150,11 +150,27 @@ def already_executed(output_path):
     return done
 
 
+def compute_batch_size(is_vanilla, count, max_gpu_memory):
+    # gpu_usage_in_mb = m * count * batch_size + b
+    if is_vanilla:
+        m = (2703 - 1721) / (48 - 24)
+        b = 1721 - 24 * m
+    else:
+        m = (5585 - 4057) / (36 - 24)
+        b = 4057 - 24 * m
+    # 0.9 for wiggle room
+    batch_size = (max_gpu_memory * 0.9 - b * count) / m
+    return int(batch_size)
+
+
 def main(args):
     if args.batch_size is not None:
-        batch_size = args.batch_size
+        batch_size = int(args.batch_size)
+    elif args.cpu:
+        batch_size = 16
     else:
-        batch_size = 16 if args.cpu else 64
+        assert args.max_gpu_memory
+        batch_size = None
     by_priority = []
     planned = set()
     for (logdir, ckpt_number), (index_last, num_checkpoints, chunk), is_overfit_model in valid_checkpoints():
@@ -177,12 +193,10 @@ def main(args):
             if already_executed(output_path):
                 continue
 
-            used_batch_size = int(batch_size)
-            if '#' in logdir:
-                used_batch_size //= 3
-            if logdir.split("/")[-1].startswith("vanilla"):
-                used_batch_size *= 2
-
+            if batch_size is None:
+                used_batch_size = compute_batch_size(logdir.split("/")[-1].startswith("vanilla"), 3 if '#' in logdir else 1, args.max_gpu_memory)
+            else:
+                used_batch_size = batch_size
             command = ('python -u program_synthesis/eval.py --model_type {model_type} --evaluate-on-all '
                        '--dataset karel --max_beam_trees 64 --step {step} '
                        '--model_dir {logdir} '
@@ -278,6 +292,7 @@ def filter_hash(by_priority, bin_count, bins):
 parser = argparse.ArgumentParser()
 parser.add_argument('--max-commands', type=int, default=None)
 parser.add_argument('--cpu', action='store_true')
+parser.add_argument('--max-gpu-memory', default=None, type=int, help="in MB")
 parser.add_argument('--batch-size')
 parser.add_argument('--priority', type=int, default=None)
 parser.add_argument('--bin-count', type=int, default=None)
