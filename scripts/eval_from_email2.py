@@ -250,13 +250,19 @@ def main(args):
             elif index_last == 0 and is_multiple(ckpt_number, 25000):
                 priority = 11
             elif not any(already_executed(output_path_pattern % other_step) or output_path_pattern % other_step in planned for _, other_step in chunk):
-                priority = 21
+                if "finetuned" in logdir:
+                    priority = 16
+                else:
+                    priority = 21
             else:
                 priority = 100
             if when == 'always':
                 priority -= 1
+            if mode == 'eval':
+                # really fast, might as well do it immediately
+                priority -= 17
             if "overfit=" in command:
-                priority += 100
+                priority += 1000
             if '#' in logdir:
                 priority += 500
             if search_param and search_param[1] >= 50:
