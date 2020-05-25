@@ -104,7 +104,7 @@ def valid_modes_and_params():
         elif mode in {'real', 'realtrain'}:
             for model in 'nearai', 'nearai32':
                 yield (mode, (model, ''), model), 'always', ''
-                for limit in 1, 5, 10, 25:
+                for limit in 1, 5, 10, 25, 50, 100:
                     for strategy in 'greedy', 'best_first':
                         if strategy == 'greedy' and limit == 1:
                             continue # greedy and best first are exactly the same for 1 step
@@ -255,6 +255,8 @@ def main(args):
             if "overfit=" in command:
                 priority += 100
             if '#' in logdir:
+                priority += 500
+            if search_param and search_param[1] >= 50:
                 priority += 30
             planned.add(output_path)
             by_priority.append((priority, command))
