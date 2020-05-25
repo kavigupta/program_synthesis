@@ -3,23 +3,12 @@
 import collections
 import six
 import time
-import os 
-
 
 try:
     from tensorflow import summary as tb_summary
 except ImportError:
     tb_summary = None
 
-from torch.utils.tensorboard import SummaryWriter
-class TensorBoardRLWrite(object):
-
-    def __init__(self, logdir, id):
-
-        self._writer = SummaryWriter(log_dir=os.path.dirname(os.path.abspath(__file__))+'/' + logdir+id)
-
-    def add(self, step, key, value):
-        self._writer.add_scalar(key,value,step)
 
 class TensorBoardWriter(object):
     """Write events in TensorBoard format."""

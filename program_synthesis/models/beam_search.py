@@ -42,116 +42,10 @@ class BeamSearchState(object):
         raise NotImplementedError
 
 
-BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs', 'log_probs_torch'])
-
-def length_penalty(sequence_lengths, penalty_factor):
-    """ 
-    Calculate the length penalty according to 
-    https://arxiv.org/abs/1609.08144
-    lp(Y) =(5 +|Y|)^α / (5 + 1)^α
-
-    Input:
-    sequence_lenthgs: the sequences length of all hypotheses of size [batch size x beam size x vocab size]
-    penalty_factor: A scalar that weights the length penalty.
-    
-    Returns:
-    The length penalty factor, a tensor fo shape [batch size x beam size].
-    """
-    return torch.div((5. + sequence_lengths)**penalty_factor, (5. + 1.)
-                **penalty_factor)
-
-def hyp_score(log_probs, sequence_lengths, penalty_factor):
-    """
-    Calculates scores for beam search hypotheses.
-    """
-
-    # Calculate the length penality
-    length_penality_ = length_penalty(
-        sequence_lengths=sequence_lengths,
-        penalty_factor=penalty_factor)
-
-    score = log_probs / length_penality_
-    
-    return score, length_penality_
-
-def Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty, factor):
-
-    """
-    Calculate prev_probs using the length penalty
-
-    Returns:
-    the previous probabilities, their indices and the previously predicted tokens
-    """
-    tt = torch.cuda if cuda else torch
-
-    batch_size,actual_beam_size,logit_size = sizes
-
-    if step>0:
-
-        # Clone log probs
-        curr_scores = total_log_probs.clone()
-
-        lengths_to_add = Variable(tt.FloatTensor(batch_size*actual_beam_size*logit_size).fill_(0)).view(batch_size,actual_beam_size,logit_size)
-        add_mask = (1 - finished_penalty)
-        lengths_to_add = add_mask.repeat(1, logit_size).view(batch_size,actual_beam_size,logit_size) * lengths_to_add
-
-        new_prediction_lengths = lengths_to_add + lengths_penalty.repeat(1, logit_size).view(batch_size,actual_beam_size,logit_size).float()
-
-        # Compute length penalty
-        curr_scores, lp = hyp_score(
-        log_probs=curr_scores,
-        sequence_lengths=new_prediction_lengths,
-        penalty_factor=factor)
-        curr_scores = curr_scores.view(batch_size, -1)
-
-        # Recover log probs
-        prev_probs, indices = curr_scores.topk(actual_beam_size, dim=1)
-
-        prev_tokens = (indices % logit_size)
-
-        target_len = []
-        for b in range(batch_size):
-            for be in range(actual_beam_size):
-                target_len.append(lp[b][be][prev_tokens[b][be]])
-
-        target_len = torch.stack(target_len).view(batch_size, actual_beam_size)
-        prev_probs = torch.mul(prev_probs, target_len) 
-
-        # Calculate the length and mask of the next predictions.
-        # 1. Finished beams remain unchanged
-        # 2. Beams that are now finished (EOS predicted) remain unchanged
-        # 3. Beams that are not yet finished have their length increased by 1
-        eos = prev_tokens == 1  
-
-        finished_penalty = (finished_penalty==1) | eos
-        finished_penalty = finished_penalty.float().view(batch_size, actual_beam_size)
-
-        lengths_to_add = (1 - finished_penalty)
-        next_prediction_len = target_len
-        next_prediction_len += lengths_to_add
-
-        lengths_penalty = next_prediction_len
-        prev_tokens = prev_tokens.view(-1)
-    
-        return prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty
-    
-    else:
-        log_probs_flat = total_log_probs.view(batch_size, -1)
-        prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
-        prev_tokens = (indices % logit_size).view(-1)
-
-        return prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty
+BeamSearchResult = collections.namedtuple('BeamSearchResult', ['sequence', 'total_log_prob', 'log_probs'])
 
 
-
-def beam_search(*args, volatile=True, **kwargs):
-    if volatile:
-        with torch.no_grad():
-            return beam_search_(*args, **kwargs)
-    else:
-        return beam_search_(*args, **kwargs)
-
-def beam_search_(batch_size,
+def beam_search(batch_size,
                 enc,
                 masked_memory,
                 decode_fn,
@@ -160,31 +54,27 @@ def beam_search_(batch_size,
                 max_decoder_length=MAX_DECODER_LENGTH,
                 return_attention=False,
                 return_beam_search_result=False,
-                differentiable=False,
-                use_length_penalty=False,
-                factor = 0.7):
+                volatile=True):
     # enc: batch size x hidden size
     # memory: batch size x sequence length x hidden size
     tt = torch.cuda if cuda else torch
     prev_tokens = Variable(tt.LongTensor(
-        batch_size).fill_(0))
+        batch_size).fill_(0), volatile=volatile)
     prev_probs = Variable(tt.FloatTensor(
-        batch_size, 1).fill_(0))
+        batch_size, 1).fill_(0), volatile=volatile)
     prev_hidden = enc
     finished = [[] for _ in range(batch_size)]
-    result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[])
+    result = [[BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0)
                for _ in range(beam_size)] for _ in range(batch_size)]
     batch_finished = [False for _ in range(batch_size)]
     # b_idx: 0, ..., 0, 1, ..., 1, ..., b, ..., b
     # where b is the batch size, and each group of numbers has as many elements
     # as the beam size.
     b_idx = Variable(
-        torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1))
-
-    finished_penalty=Variable(tt.FloatTensor(batch_size*beam_size).fill_(0)).view(batch_size, beam_size)
-    lengths_penalty=Variable(tt.LongTensor(batch_size*beam_size).fill_(0)).view(batch_size, beam_size)
+        torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, beam_size).view(-1), volatile=volatile)
 
     prev_masked_memory = masked_memory.expand_by_beam(beam_size)
+
     attn_list = [] if return_attention else None
     for step in range(max_decoder_length):
         hidden, logits = decode_fn(prev_tokens, prev_hidden,
@@ -199,33 +89,16 @@ def beam_search_(batch_size,
         log_probs_flat = total_log_probs.view(batch_size, -1)
         # indices: batch size x beam size
         # Each entry is in [0, beam_size * vocab_size)
-        actual_beam_size = min(beam_size, log_probs_flat.size(1))
-        sizes=(batch_size,actual_beam_size,logit_size)
-
-        if use_length_penalty:
-            prev_probs, indices, prev_tokens, finished_penalty, lengths_penalty = Calculate_prob_idx_token_with_penalty(cuda, step, sizes, total_log_probs, finished_penalty, lengths_penalty, factor)
-
-        else:
-
-            prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
-        
-            # prev_tokens: batch_size * beam size
-            # Each entry indicates which token should be added to each beam.
-            prev_tokens = (indices % logit_size).view(-1)
-
+        prev_probs, indices = log_probs_flat.topk(min(beam_size, log_probs_flat.size(1)), dim=1)
+        # prev_tokens: batch_size * beam size
+        # Each entry indicates which token should be added to each beam.
+        prev_tokens = (indices % logit_size).view(-1)
         # This takes a lot of time... about 50% of the whole thing.
         indices = indices.cpu()
         # k_idx: batch size x beam size
         # Each entry is in [0, beam_size), indicating which beam to extend.
         k_idx = (indices / logit_size)
-
-        if beam_size == actual_beam_size:
-            b_idx_to_use = b_idx
-        else:
-            b_idx_to_use = Variable(
-                torch.arange(0, batch_size, out=torch.LongTensor()).unsqueeze(1).repeat(1, actual_beam_size).view(-1))
-
-        idx = torch.stack([b_idx_to_use, k_idx.view(-1)])
+        idx = torch.stack([b_idx, k_idx.view(-1)])
         # prev_hidden: (batch size * beam size) x hidden size
         # Contains the hidden states which produced the top-k (k = beam size)
         # tokens, and should be extended in the step.
@@ -247,32 +120,22 @@ def beam_search_(batch_size,
                 if finished[batch_id][-1].total_log_prob > prev_probs_np[batch_id, 0]:
                     batch_finished[batch_id] = True
                     continue
-            for idx in range(actual_beam_size):
+            for idx in range(beam_size):
                 token = indices[batch_id, idx] % logit_size
                 kidx = k_idx[batch_id, idx]
                 # print(step, batch_id, idx, 'token', token, kidx, 'prev', prev_result[batch_id][kidx], prev_probs.data[batch_id][idx])
                 if token == 1:  # 1 == </S>
-                    if differentiable:
-                        log_probs_torch = prev_result[batch_id][kidx].log_probs_torch + [log_probs[batch_id, kidx, token]]
-                    else:
-                        log_probs_torch = None
                     finished[batch_id].append(BeamSearchResult(
                         sequence=prev_result[batch_id][kidx].sequence,
                         total_log_prob=prev_probs_np[batch_id, idx],
-                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
-                        log_probs_torch=log_probs_torch))
-                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0, log_probs_torch=[]))
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]]))
+                    result[batch_id].append(BeamSearchResult(sequence=[], log_probs=[], total_log_prob=0))
                     prev_probs.data[batch_id][idx] = float('-inf')
                 else:
-                    if differentiable:
-                        log_probs_torch = prev_result[batch_id][kidx].log_probs_torch + [log_probs[batch_id, kidx, token]]
-                    else:
-                        log_probs_torch = None
                     result[batch_id].append(BeamSearchResult(
                         sequence=prev_result[batch_id][kidx].sequence + [token],
                         total_log_prob=prev_probs_np[batch_id, idx],
-                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]],
-                        log_probs_torch=log_probs_torch))
+                        log_probs=prev_result[batch_id][kidx].log_probs + [log_probs_np[batch_id, kidx, token]]))
                     can_stop = False
             if len(finished[batch_id]) >= beam_size:
                 # Sort and clip.

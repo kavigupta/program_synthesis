@@ -5,11 +5,6 @@ import sys
 import time
 import traceback
 import random
-import tqdm
-import os
-
-import sklearn
-import numpy as np
 
 from datasets import dataset
 from datasets import executor
@@ -65,18 +60,14 @@ class EvalReport(object):
             f.write("</table>\n")
             f.write("</body></html>")
 
-    def save(self, done=False):
+    def save(self):
         if self.report_path:
             report_path = self.report_path
         else:
             timestamp = int(time.time())
             report_path = 'reports/report-%s-%s.json' % (self.tag, timestamp)
-        try:
-            os.makedirs(os.path.dirname(report_path))
-        except FileExistsError:
-            pass
         with open(report_path, 'w') as f:
-            f.write(json.dumps({**self.stats, 'done' : done}) + "\n")
+            f.write(json.dumps(self.stats) + "\n")
             for example, res, st in self.report:
                 f.write(json.dumps({
                     "stats": st,
@@ -147,58 +138,8 @@ class EvalReport(object):
             self.show_example(example, res, st)
 
 
-def run_predict(dataset, inference, do_execute, inference_output_path, evaluate_on_all=False):
-    """Runs inference of given model on eval set, and executes resulting code.
-
-    Args:
-        tag: str, tag of the run to save report.
-        dataset: Dataset, iterable of CodeExample to evaluate on.
-        inference: func, produces code for given CodeExamples.
-        do_execute: func, runs given code with given arguments.
-        show_info: Show specific example additional information.
-    """
-    assert inference_output_path is not None, "must provide path"
-    assert not os.path.exists(inference_output_path), "must be a path that doesn't exist"
-    assert os.path.isdir(os.path.dirname(inference_output_path)), "parent folder must exist"
-    predictions = []
-    success = total = 0
-    pdataset = tqdm.tqdm(dataset)
-    for batch in pdataset:
-        results = inference(batch)
-        for res, example in zip(results, batch.orig_examples):
-            tests = []
-            if evaluate_on_all:
-                tests += list(example.input_tests)
-            tests += list(example.tests)
-            stats = executor.evaluate_code(res.code_sequence, example.schema.args, tests, do_execute)
-            prediction = dict(
-                output=res.info['candidates'][0],
-                beams=res.info['candidates'],
-                beams_correct=[executor.evaluate_code(hypothesis, example.schema.args, tests, do_execute) for hypothesis
-                               in res.info['candidates']],
-                is_correct=stats['correct'] == stats['total'],
-                individual=stats['individual'],
-                guid=example.guid,
-            )
-            if evaluate_on_all:
-                prediction['passes_given_tests'] = all(stats['individual'][:len(example.input_tests)])
-            predictions.append(prediction)
-            success += stats['correct'] == stats['total']
-            total += 1
-            pdataset.set_description("Accuracy: {:.2f}%".format(success / total * 100))
-    with open(inference_output_path, "w") as f:
-        json.dump(predictions, f)
-
-def limited(dataset, limit):
-    count = 0
-    for batch in dataset:
-        if limit is not None and count >= limit:
-            break
-        count += batch.input_grids.shape[0]
-        yield batch
-
 def run_eval(tag, dataset, inference, do_execute, show_info=True,
-        report_path=None, limit=None, evaluate_on_all=False):
+        report_path=None):
     """Runs inference of given model on eval set, and executes resulting code.
 
     Args:
@@ -209,67 +150,23 @@ def run_eval(tag, dataset, inference, do_execute, show_info=True,
         show_info: Show specific example additional information.
     """
     report = EvalReport(tag=tag, show_info=show_info, report_path=report_path)
-    done = False
     try:
-        for batch in limited(dataset, limit):
+        for batch in dataset:
             start = time.time()
             results = inference(batch)
             for res, example in zip(results, batch.orig_examples):
-                tests = []
-                if evaluate_on_all:
-                    tests += list(example.input_tests)
-                tests += list(example.tests)
+                #print res.code_tree
                 stats = executor.evaluate_code(
-                    res.code_tree if res.code_tree else res.code_sequence, example.schema.args, tests, do_execute)
+                    res.code_tree if res.code_tree else res.code_sequence, example.schema.args, example.tests, do_execute)
                 report.add_example(example, res, stats)
             print("[Eval] Elapsed time for %d examples: %f" %
                     (len(batch.orig_examples), time.time() - start))
             report.display()
-        done = True
     finally:
         print("Stopped.")
-        report.save(done)
+        report.save()
         report.display()
-
-def run_overfit_eval(dataset, inference, report_path=None, limit=None):
-    """Runs inference of given model on eval set, and executes resulting code.
-
-    Args:
-        tag: str, tag of the run to save report.
-        dataset: Dataset, iterable of CodeExample to evaluate on.
-        inference: func, produces code for given CodeExamples.
-        do_execute: func, runs given code with given arguments.
-        show_info: Show specific example additional information.
-    """
-    true_labels = []
-    pred_logits = []
-    for batch in limited(dataset, limit):
-        start = time.time()
-        results = inference(batch)
-        true_labels += [int(eg.ref_example.code_is_correct) for eg in batch.orig_examples]
-        pred_logits += results.detach().cpu().numpy().tolist()
-        confusion = sklearn.metrics.confusion_matrix(true_labels, np.array(pred_logits) > 0)
-        accuracy = (confusion[0, 0] + confusion[1, 1]) / np.sum(confusion)
-        print("Done with {} examples in {:.2f}s. Accuracy={:.2f} confusion={}".format(len(batch.orig_examples),
-                                                                                      time.time() - start,
-                                                                                      accuracy, confusion.tolist()))
-
-    fpr, tpr, thresh = sklearn.metrics.roc_curve(true_labels, pred_logits)
-
-    result = dict(
-        accuracy=accuracy,
-        confusion=confusion.tolist(),
-        fpr=fpr.tolist(),
-        tpr=tpr.tolist(),
-        thresh=thresh.tolist(),
-        done=True
-    )
-
-    if report_path:
-        with open(report_path, "w") as f:
-            json.dump(result, f)
-    else:
-        print(result)
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='')

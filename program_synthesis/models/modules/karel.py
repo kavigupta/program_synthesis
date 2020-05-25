@@ -1,7 +1,4 @@
-from abc import ABC, abstractmethod
-
 import collections
-import functools
 
 import torch
 import torch.nn as nn
@@ -13,7 +10,6 @@ from models import base, prepare_spec
 from .. import beam_search
 from datasets import data
 from .attention import SimpleSDPAttention
-from .gcn_conv import MultiGCNConv, GGCN
 
 
 def default(value, if_none):
@@ -74,18 +70,6 @@ def lstm_init(cuda, num_layers, hidden_size, *batch_sizes):
 
 
 SequenceMemory = collections.namedtuple('SequenceMemory', ['mem', 'state'])
-
-
-def make_task_encoder(args):
-    if args.karel_io_enc == 'lgrl':
-        return LGRLTaskEncoder(args)
-    elif args.karel_io_enc == 'none':
-        return none_fn
-    else:
-        raise ValueError(args.karel_io_enc)
-
-def none_fn(*args, **kwargs):
-    return None
 
 
 class LGRLTaskEncoder(nn.Module):
@@ -314,11 +298,10 @@ class LGRLSeqDecoder(nn.Module):
         return lstm_init(self._cuda, 2, 256, *args)
 
 class GridEncoder(nn.Module):
-    def __init__(self, num_grids, channels, output_size=256):
+    def __init__(self, channels):
         super().__init__()
-        self.output_size = output_size
         self.initial_conv = nn.Conv2d(
-            in_channels=num_grids * 15, out_channels=channels, kernel_size=3, padding=1)
+            in_channels=15, out_channels=channels, kernel_size=3, padding=1)
         self.blocks = nn.ModuleList([
             nn.Sequential(
                 nn.BatchNorm2d(channels),
@@ -331,7 +314,7 @@ class GridEncoder(nn.Module):
                     in_channels=channels, out_channels=channels, kernel_size=3, padding=1))
             for _ in range(3)
         ])
-        self.grid_fc = nn.Linear(channels * 18 * 18, self.output_size)
+        self.grid_fc = nn.Linear(channels * 18 * 18, 256)
         self.channels = channels
     def forward(self, grids):
         out = self.initial_conv(grids)
@@ -341,299 +324,40 @@ class GridEncoder(nn.Module):
         out = self.grid_fc(out)
         return out
 
-class TraceLSTM(nn.Module):
-    def __init__(self, input_dimension, num_layers):
-        super().__init__()
-        self.input_dimension = input_dimension
-        self.num_layers = num_layers
-        self.lstm = nn.LSTM(
-            input_size=input_dimension,
-            hidden_size=input_dimension,
-            num_layers=num_layers,
-            bidirectional=True,
-            batch_first=True)
-        self.fc = nn.Linear(input_dimension * 2, input_dimension)
-
-    def forward(self, traces):
-        output, _ = self.lstm(traces.ps,
-                                     lstm_init(traces.ps.data.is_cuda, self.num_layers * 2, self.input_dimension,
-                                               traces.ps.batch_sizes[0]))
-        result = traces.with_new_ps(output)
-        result = result.apply(self.fc)
-        return result
-
-def get_program_trace_edges(trace_events, program_itv, trace_itv):
-    edges = []
-    for batch_idx, item in enumerate(trace_events.spans):
-        # traces_Per_program_token[i] == (trace indices, weights)
-        for test_idx, test in enumerate(item):
-            for trace_idx, (start, end), _ in test:
-                for i in range(start, end + 1):
-                    # assert trace_idx > 0
-                    pi = program_itv[batch_idx, i]
-                    ti = trace_itv[batch_idx * 5 + test_idx, trace_idx - 1]
-                    edges.append((pi, ti))
-    return edges
-
-
-def get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit):
-    """
-    Parameters:
-        trace_events: a Spans object representing the events happening during a trace
-        inp_lengths: the lengths of each program
-        inp_itv: a mapping from (program number, number within program) --> vertex
-        trace_lengths: the lengths of each trace
-        trace_itv: a mapping from (trace number, number within trace) --> vertex
-        sequence_edge_limit: the maximum number of hops to connect elements in a sequence (trace or program)
-    """
-    program_trace = get_program_trace_edges(trace_events, inp_itv, trace_itv)
-    edges = []
-    edges += [(p, t, 'pt') for p, t in program_trace]
-    edges += [(t, p, 'tp') for p, t in program_trace]
-    edges += generate_sequence_edges(sequence_edge_limit, 'tt', trace_itv, trace_lengths)
-    edges += generate_sequence_edges(sequence_edge_limit, 'pp', inp_itv, inp_lengths)
-    return edges
-
-
-def generate_sequence_edges(sequence_edge_limit, tag, itv, lengths):
-    edges = []
-    for dist in range(1, 1 + sequence_edge_limit):
-        for i, length in enumerate(lengths):
-            for j in range(length - dist):
-                start, end = itv[i, j], itv[i, j + dist]
-                edges += [(start, end, (tag, dist))]
-                edges += [(end, start, (tag, -dist))]
-    return edges
-
-def get_edge_types(sequence_edge_limit):
-    edge_types = []
-    edge_types += ['pt', 'tp']
-    for dist in range(1, 1 + sequence_edge_limit):
-        edge_types += [('pp', +dist), ('pp', -dist), ('tt', +dist), ('tt', -dist)]
-    return edge_types
-
-class TraceGraphConv(nn.Module):
-    def __init__(self, program_dim, grid_dim, layers, sequence_edge_limit, ggcn, ggcn_multi_edge_types):
-        super().__init__()
-        assert program_dim == grid_dim
-        if ggcn_multi_edge_types:
-            assert ggcn, "to use multiple edge types, you need to use ggcn"
-        self.dim = program_dim
-        self.ggcn = ggcn
-        self.ggcn_multi_edge_types = ggcn_multi_edge_types
-        self.sequence_edge_limit = sequence_edge_limit
-        if ggcn:
-            if self.ggcn_multi_edge_types:
-                self.multi_conv = GGCN(self.dim, get_edge_types(sequence_edge_limit), layers)
-            else:
-                self.multi_conv = GGCN(self.dim, None, layers)
-        else:
-            self.multi_conv = MultiGCNConv(self.dim, layers)
-
-    def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
-
-        def flatten(embeddings):
-            flat_to_normal = [(i, j) for i, length in enumerate(embeddings.orig_lengths()) for j in range(length)]
-            normal_to_flat = {ij : f_i for f_i, ij in enumerate(flat_to_normal)}
-            batch_indices, seq_indices = zip(*flat_to_normal)
-            return embeddings.select(batch_indices, seq_indices), flat_to_normal, normal_to_flat
-
-        inp_flat, inp_ftn, inp_itv = flatten(inp_embed)
-        trace_flat, trace_ftn, trace_ntf = flatten(trace_embed)
-
-        trace_lengths = trace_embed.orig_lengths()
-        inp_lengths = inp_embed.orig_lengths()
-
-        vertices = torch.cat([inp_flat, trace_flat], dim=0)
-
-        trace_itv = {ij : f_i + len(inp_ftn) for ij, f_i in trace_ntf.items()}
-
-        edges = get_edges(trace_events, inp_lengths, inp_itv, trace_lengths, trace_itv, sequence_edge_limit=self.sequence_edge_limit)
-
-        vertices = self.multi_conv(vertices, edges)
-
-        out_flat = torch.cat([inp_flat, vertices[:len(inp_ftn)]], dim=-1)
-
-        out_ps_data = torch.zeros(*inp_flat.shape[:-1], inp_flat.shape[-1] * 2)
-        if vertices.is_cuda:
-            out_ps_data = out_ps_data.cuda()
-        out_ps_data[inp_embed.raw_index(*zip(*inp_ftn))] = out_flat
-
-        return inp_embed.with_new_ps(
-            torch.nn.utils.rnn.PackedSequence(
-                out_ps_data,
-                inp_embed.ps.batch_sizes
-            )
-        )
-
-    @property
-    def output_embedding_size(self):
-        return self.dim * 2
-
-class SummarizationTrace(nn.Module, ABC):
-    def __init__(self, program_dim, grid_dim):
-        super().__init__()
-        self.program_dim = program_dim
-        self.grid_dim = grid_dim
-
-    def forward(self, inp_embed, trace_embed, trace_events, program_lengths):
-        all_sum_traces = self.summarize_trace_per_token(trace_embed, trace_events, program_lengths)
-        return inp_embed.cat_with_list(all_sum_traces)
-
-    @abstractmethod
-    def trace_for_no_token(self):
-        pass
-
-    @abstractmethod
-    def summarize_traces(self, traces, weights):
-        pass
-
-    def summarize_trace_per_token(self, trace_embed, trace_events, program_lengths):
-        all_sum_traces = []
-        for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
-            # traces_Per_program_token[i] == (trace indices, weights)
-            trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
-            weights = collections.defaultdict(list)
-            for test_idx, test in enumerate(item):
-                for trace_idx, (start, end), _ in test:
-                    for i in range(start, end + 1):
-                        # assert trace_idx > 0
-                        trace_indices[i].append((test_idx, trace_idx - 1))
-                        weights[i].append(1 / (end + 1 - start))
-
-            sum_traces = []
-            for i in range(prog_len):
-                if not trace_indices[i]:
-                    zeros = self.trace_for_no_token()
-                    if trace_embed.ps.data.is_cuda:
-                        zeros = zeros.cuda()
-                    sum_traces.append(Variable(zeros))
-                    continue
-                traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
-                weights_for_this = Variable(torch.FloatTensor(weights[i]))
-                if traces_for_token.is_cuda:
-                    weights_for_this = weights_for_this.cuda()
-                sum_traces.append(self.summarize_traces(traces_for_token, weights_for_this))
-
-            all_sum_traces.append(torch.stack(sum_traces, dim=0))
-        return all_sum_traces
-
-    @property
-    def output_embedding_size(self):
-        return self.program_dim + self.grid_dim
-
-
-class SumTrace(SummarizationTrace):
-    def trace_for_no_token(self):
-        return torch.zeros(self.grid_dim)
-
-    def summarize_traces(self, traces, weights):
-        return (traces * weights.unsqueeze(-1)).sum(0)
-
-class AttentionTrace(SummarizationTrace):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.attention_module = nn.Sequential(
-            nn.Linear(self.grid_dim, self.grid_dim),
-            nn.ReLU(),
-            nn.Linear(self.grid_dim, self.grid_dim),
-            nn.ReLU(),
-            nn.Linear(self.grid_dim, 1)
-        )
-
-    def trace_for_no_token(self):
-        return torch.zeros(self.grid_dim)
-
-    def summarize_traces(self, traces, weights):
-        attn_weights = self.attention_module(traces).squeeze(-1).softmax(0)
-        return (attn_weights.unsqueeze(-1) * traces).sum(0)
-
 class AugmentWithTrace(nn.Module):
-    def __init__(self,
-            grid_encoder_channels=64,
-            conv_all_grids=False,
-            rnn_trace=False, rnn_trace_layers=2,
-            graph_conv_trace=False, graph_conv_trace_layers=2, graph_conv_sequence_edge_limit=1,
-            graph_conv_ggcn=False, graph_conv_multi_edge_types=False,
-            attention_trace=False):
-        """
-        grid_encoder_channels: the number of channels to use in the conv
-        conv_all_grids: whether to pass all 3 grids [trace, input, output] in as separate channels in the encoder
-        """
+    def __init__(self, grid_encoder_channels=64):
         super().__init__()
-        self.conv_all_grids = conv_all_grids
-        self.grid_enc = GridEncoder(3 if self.conv_all_grids else 1, grid_encoder_channels)
-        if rnn_trace:
-            self.trace_lstm = TraceLSTM(input_dimension=self.grid_enc.output_size, num_layers=rnn_trace_layers)
-        else:
-            self.trace_lstm = lambda x: x
+        self.grid_enc = GridEncoder(grid_encoder_channels)
 
-
-        assert not graph_conv_trace or not attention_trace, "cannot be both graph conv and attention trace"
-
-        if graph_conv_trace:
-            trace_incorporator_cls = functools.partial(TraceGraphConv, layers=graph_conv_trace_layers,
-                                                       sequence_edge_limit=graph_conv_sequence_edge_limit,
-                                                       ggcn=graph_conv_ggcn,
-                                                       ggcn_multi_edge_types=graph_conv_multi_edge_types)
-        elif attention_trace:
-            trace_incorporator_cls = AttentionTrace
-        else:
-            trace_incorporator_cls = SumTrace
-        self.trace_incorporator = trace_incorporator_cls(256, self.grid_enc.output_size)
-
-
-    def forward(self, inp_embed, input_grid, output_grid, traces, trace_events, program_lengths):
-        if self.conv_all_grids:
-            concat_grids = torch.cat(list(torch.cat([input_grid, output_grid], dim=2)), dim=0)
-            traces = traces.cat_with_item(concat_grids)
+    def forward(self, inp_embed, traces, trace_events, program_lengths):
         trace_embed = traces.apply(self.grid_enc)
-        trace_embed = self.trace_lstm(trace_embed)
-        return self.trace_incorporator(inp_embed, trace_embed, trace_events, program_lengths)
-
-    @property
-    def output_embedding_size(self):
-        return self.trace_incorporator.output_embedding_size
-
-class DoNotAugmentWithTrace(nn.Module):
-    def forward(self, inp_embed, *args, **kwargs):
-        return inp_embed
-
-    @property
-    def output_embedding_size(self):
-        return 256
-
-def construct_augment_with_trace(strategy=AugmentWithTrace, **kwargs):
-    return strategy(**kwargs)
+        all_sum_traces = produce_sum_trace(trace_embed, trace_events, program_lengths)
+        return inp_embed.cat_with_list(all_sum_traces)
 
 class CodeEncoder(nn.Module):
     def __init__(self, vocab_size, args):
         super(CodeEncoder, self).__init__()
 
         self._cuda = args.cuda
-        # corresponds to self.token_embed
         self.embed = nn.Embedding(vocab_size, 256)
         if args.karel_trace_enc.startswith('aggregate'):
-            if ":" in args.karel_trace_enc:
-                index = args.karel_trace_enc.index(":")
-                kwargs = eval("dict({})".format(args.karel_trace_enc[index + 1:]))
-            else:
-                kwargs = {}
-            self.augment_with_trace = construct_augment_with_trace(**kwargs)
+            self.augment_with_trace = AugmentWithTrace()
+            output_embedding_size = 256 * 2
         else:
-            self.augment_with_trace = DoNotAugmentWithTrace()
+            self.augment_with_trace = lambda x, traces, trace_events, program_lengths: x
+            output_embedding_size = 256
 
         self.encoder = nn.LSTM(
-            input_size=self.augment_with_trace.output_embedding_size,
+            input_size=output_embedding_size,
             hidden_size=256,
             num_layers=2,
             bidirectional=True,
             batch_first=True)
 
-    def forward(self, inputs, input_grid, output_grid, traces, trace_events):
+    def forward(self, inputs, traces, trace_events):
         # inputs: PackedSequencePlus, batch size x sequence length
         inp_embed = inputs.apply(self.embed)
-        inp_embed = self.augment_with_trace(inp_embed, input_grid, output_grid, traces, trace_events, list(inputs.orig_lengths()))
+        inp_embed = self.augment_with_trace(inp_embed, traces, trace_events, list(inputs.orig_lengths()))
         # output: PackedSequence, batch size x seq length x hidden (256 * 2)
         # state: 2 (layers) * 2 (directions) x batch x hidden size (256)
         output, state = self.encoder(inp_embed.ps,
@@ -643,6 +367,36 @@ class CodeEncoder(nn.Module):
         return SequenceMemory(
                 inp_embed.with_new_ps(output),
                 state)
+
+def produce_sum_trace(trace_embed, trace_events, program_lengths):
+    all_sum_traces = []
+    for batch_idx, (item, prog_len) in enumerate(zip(trace_events.spans, program_lengths)):
+        # traces_Per_program_token[i] == (trace indices, weights)
+        trace_indices = collections.defaultdict(list) # ZERO INDEXED, unlike in Spans
+        weights = collections.defaultdict(list)
+        for test_idx, test in enumerate(item):
+            for trace_idx, (start, end), _ in test:
+                for i in range(start, end + 1):
+                    # assert trace_idx > 0
+                    trace_indices[i].append((test_idx, trace_idx - 1))
+                    weights[i].append(1 / (end + 1 - start))
+
+        sum_traces = []
+        for i in range(prog_len):
+            if not trace_indices[i]:
+                zeros = torch.zeros(trace_embed.ps.data.shape[-1])
+                if trace_embed.ps.data.is_cuda:
+                    zeros = zeros.cuda()
+                sum_traces.append(Variable(zeros))
+                continue
+            traces_for_token = trace_embed.select(*trace_overall_index(batch_idx, trace_indices[i]))
+            weights_for_this = Variable(torch.FloatTensor(weights[i]))
+            if traces_for_token.is_cuda:
+                weights_for_this = weights_for_this.cuda()
+            sum_traces.append((traces_for_token * weights_for_this.unsqueeze(-1)).sum(0))
+
+        all_sum_traces.append(torch.stack(sum_traces, dim=0))
+    return all_sum_traces
 
 def trace_overall_index(batch_idx, test_time_indices):
     """
@@ -657,127 +411,6 @@ def trace_overall_index(batch_idx, test_time_indices):
     # this assumes 5 tests exactly
     assert all(test < 5 for test, _ in test_time_indices)
     return [batch_idx * 5 + test for test, _ in test_time_indices], [time for _, time in test_time_indices]
-
-
-
-class CodeEncoderAlternative(nn.Module):
-    def __init__(self, vocab_size, args):
-        super(CodeEncoderAlternative, self).__init__()
-        self._cuda = args.cuda
-        self.embed = nn.Embedding(vocab_size, 256)
-        self.encoder = nn.LSTM(input_size=256, hidden_size=256, num_layers=2, bidirectional=True, batch_first=True)
-
-    def get_embed(self, inputs):
-        inputs = inputs.type(torch.LongTensor)  # Make valid tensor for embeddings
-        inp_embed = self.embed(inputs)
-        return inp_embed
-
-    def forward(self, inputs):
-        inp_embed = self.get_embed(inputs)
-
-        inp_embed = inp_embed.permute((1, 0, 2))
-        seq, (output, _) = self.encoder(inp_embed,
-                                        lstm_init(self._cuda, 4, 256, inp_embed.shape[0]))
-
-        output = seq[-1]
-        return inp_embed, output
-
-
-class CodeEncoderRL(nn.Module):
-    """ Similar to CodeEncoderAlternative
-    """
-
-    def __init__(self, args):
-        super(CodeEncoderRL, self).__init__()
-        self._cuda = args.cuda
-        self.encoder = nn.LSTM(input_size=256, hidden_size=256, num_layers=2, bidirectional=True, batch_first=True)
-        self.token = nn.Linear(512, 512)
-
-    def forward(self, inp_embed: torch.Tensor):
-        """
-            Input:
-                `inp_embed` expected shape:
-                    (batch_size x seq_length x embed_size)
-
-            Output:
-                `seq` expected shape:
-                    (batch_size x seq_length x position_embed[256])
-
-                `output` expected shape:
-                    (batch_size x seq_length x position_embed[256])
-        """
-        seq, (output, _) = self.encoder(inp_embed,
-                                        lstm_init(self._cuda, 4, 256, inp_embed.shape[0]))
-        seq = F.relu(self.token(seq))
-        output = output[-1]
-        return seq, output
-
-
-class CodeUpdater(nn.Module):
-    def __init__(self, args):
-        super(CodeUpdater, self).__init__()
-        self._cuda = args.cuda
-        self.encoder = nn.LSTM(
-            input_size=512 + 512,
-            hidden_size=256,
-            num_layers=1,
-            bidirectional=True)
-
-        # self.zero_memory = Variable(torch.zeros(1, 256))
-        self.trace_gate = nn.Sequential(
-            nn.Linear(512 + 512, 512),
-            nn.Sigmoid())
-
-    def forward(self, code_memory, trace_memory, code_update_info):
-        # For each code position, find all of the times that the code has been
-        # referenced in the execution trace: action and cond events.
-        # - Scale each one by a sigmoid and then sum?
-        # - Run a separate RNN over each one?
-        #
-        # For each x_i, find t_i1, ..., t_ik.
-        # r_ik = sigmoid(W [x_i t_i1])
-        # x_i' = concat(x_i, sum_k (r_ik * t_ik))
-        # inputs: PackedSequencePlus, batch size x seq length x hidden (256 * 2)
-        #
-        # code_indices: indices of code tokens
-        # trace_indices: indices of trace events
-
-        selected_code_memory = code_memory.mem.ps.data[
-            code_update_info.code_indices]
-        selected_trace_memory = trace_memory.mem.ps.data[
-            code_update_info.trace_indices]
-
-        # Shape: num items x 512
-        trace_gates = self.trace_gate(torch.cat(
-            (selected_code_memory, selected_trace_memory), dim=1))
-        gated_trace_memory = trace_gates * selected_trace_memory
-
-        # max_trace_refs:
-        #   maximum number of times that some token is referenced in the trace
-        # code length x max trace refs x 256
-        code_trace_update = Variable(
-            torch.zeros(
-                code_memory.mem.ps.data.shape[0] *
-                code_update_info.max_trace_refs,
-                512,
-                out=torch.cuda.FloatTensor()
-                if self._cuda else torch.FloatTensor()))
-
-        code_trace_update.index_copy_(
-            0, code_update_info.code_trace_update_indices, gated_trace_memory)
-        # code length x 256
-        code_trace_update = code_trace_update.view(
-            code_memory.mem.ps.data.shape[0], code_update_info.max_trace_refs,
-            512).sum(dim=1)
-
-        updates, new_state = self.encoder(
-            code_memory.mem.apply(
-                lambda t: torch.cat([t, code_trace_update], dim=1)).ps)
-
-        code_memory = code_memory.mem.apply(lambda t: t + updates.data)
-        return utils.EncodedSequence(code_memory, new_state)
-
-
 
 class TraceEncoder(nn.Module):
     def __init__(self, interleave_events, include_flow_events,
@@ -1347,7 +980,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         # insertion only.
         # In all cases, don't allow <s>.
         # Positions where mask is 1 will get -inf as the logit.
-        self.end_mask = torch.BoolTensor([
+        self.end_mask = torch.ByteTensor([
             [1] + [0] * (num_ops - 1),
             # <s>, </s>, keep, delete
             np.concatenate(([1, 0, 1, 1],  self.increment_source_loc[4:])).tolist()
@@ -1384,21 +1017,6 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         return LGRLRefineEditMemory(io_embed, code_memory, ref_code)
 
     def forward(self, io_embed, code_memory, _1, _2, dec_data):
-
-        dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
-
-        if self.use_code_attn:
-            logits = torch.cat(dec_output, dim=0)
-            labels = dec_data.output.ps.data
-            return logits, labels
-
-        else:
-            logits = self.out(dec_output)
-            labels = dec_data.output.ps.data
-
-        return logits, labels
-
-    def common_forward(self, io_embed, code_memory, _1, _2, dec_data):
         # io_embed: batch size x num pairs x 512
         # code_memory:
         #   PackedSequencePlus, batch size x code length x 512
@@ -1451,7 +1069,9 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                 offset += bs
                 last_bs = bs
 
-            return logits, dec_data
+            logits = torch.cat(logits, dim=0)
+            labels = dec_data.output.ps.data
+            return logits, labels
 
         io_embed_flat = io_embed.view(-1, *io_embed.shape[2:])
 
@@ -1474,24 +1094,13 @@ class LGRLSeqRefineEditDecoder(nn.Module):
         dec_output, _ = dec_output.data.view(-1, pairs_per_example,
                 *dec_output.data.shape[1:]).max(dim=1)
 
-        return dec_output, dec_data
+        logits = self.out(dec_output)
+        labels = dec_data.output.ps.data
 
-    def rl_forward(self, io_embed, code_memory, _1, _2, dec_data):
-        dec_output, dec_data = self.common_forward(io_embed, code_memory, _1, _2, dec_data)
-
-        if self.use_code_attn:
-            logits = torch.cat(dec_output, dim=0)
-            labels = dec_data.output.ps.data
-            return logits, labels, None
-
-        else:
-            logits = self.out(dec_output)
-            labels = dec_data.output.ps.data
-
-        return logits, labels, dec_output, (dec_data.output.ps.batch_sizes, dec_data.output.orig_to_sort)#dec_data.output.lengths
+        return logits, labels
 
     def decode_token(self, token, state, memory, attentions, batch_order=None,
-            use_end_mask=True, return_dec_out=False):
+            use_end_mask=True):
         pairs_per_example  = memory.io.shape[1]
         token_np = token.data.cpu().numpy()
         new_finished = state.finished.copy()
@@ -1608,20 +1217,15 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                     end_mask.append(1)
                 # source_len is 1 longer than in reality because we appended
                 # </s> to each source sequence.
-                elif loc == source_len - 1 or source_len == 1:
+                elif loc == source_len - 1:
                     end_mask.append(1)
                 elif loc >= source_len:
-                    print("Warning: loc ({}) >= source_len ({})".format(loc, source_len))
-                    end_mask.append(1)
+                    raise ValueError(loc)
                 else:
                     end_mask.append(0)
             logits.data.masked_fill_(self.end_mask[end_mask], float('-inf'))
 
-        if return_dec_out:
-            return LGRLRefineEditDecoderState(new_source_locs, new_finished,
-                new_context, *new_state), logits, dec_output
-        else:
-            return LGRLRefineEditDecoderState(new_source_locs, new_finished,
+        return LGRLRefineEditDecoderState(new_source_locs, new_finished,
                 new_context, *new_state), logits
 
     def postprocess_output(self, sequences, memory):
@@ -1714,79 +1318,16 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                 *lstm_init(self._cuda, 2, 256, batch_size, pairs_per_example))
 
 
-class LGRLClassifierDecoder(nn.Module):
-    def __init__(self, vocab_size, args):
-        self._cuda = args.cuda
-        super(LGRLClassifierDecoder, self).__init__()
-        self.attention = PackedSequenceAttention(512, 512 * 5)
-        self.final_fc = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 2)
-        )
-
-    def forward(self, io_embed, code_memory):
-        ps, state = code_memory.mem, code_memory.state
-
-        assert len(io_embed.shape) == 3
-        io_embed = io_embed.reshape(io_embed.shape[0], -1)
-        io_embed_per_token = io_embed[ps.orig_batch_indices()]
-        result = self.attention(ps, io_embed_per_token)
-        logits = self.final_fc(result)
-        return logits
-
-
-class PackedSequenceAttention(nn.Module):
-    def __init__(self, x, y):
-        """
-        Represents attention module that can be run on a packed sequence
-        """
-        super().__init__()
-        self.attention_fc = nn.Sequential(
-            nn.Linear(x + y, 512),
-            nn.ReLU(),
-            nn.Linear(512, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1)
-        )
-        self.x = x
-        self.y = y
-
-    def forward(self, ps, extra):
-        """
-        Arguments:
-            ps: PackedSequencePlus representing B batches containing data of size X
-            extra: tensor of size (B, Y) containing extra information per batch
-        Result:
-            tensor of size (B, X) which is the result of running attention on each sequence in ps
-        """
-        assert len(ps.ps.data.shape) == 2
-        assert len(extra.shape) == 2
-        assert extra.shape[0] == len(ps.orig_batch_indices())
-        assert ps.ps.data.shape[1] == self.x
-        assert extra.shape[1] == self.y
-
-        ps_combined = ps.apply(lambda data: torch.cat([data, extra], dim=1))
-        attention_logits = ps_combined.apply(self.attention_fc)
-        values = []
-        for batch_idx, length in enumerate(ps.orig_lengths()):
-            idxs = [batch_idx] * length.item(), list(range(length.item()))
-            logits_for_this = attention_logits.select(*idxs)
-            data_for_this = ps.select(*idxs)
-            values.append((logits_for_this.softmax(axis=0) * data_for_this).sum(0).unsqueeze(0))
-        return torch.cat(values, dim=0)
-
-
 class LGRLKarel(nn.Module):
     def __init__(self, vocab_size, args):
         super(LGRLKarel, self).__init__()
         self.args = args
 
-        self.task_encoder = LGRLTaskEncoder(args)
+        self.encoder = LGRLTaskEncoder(args)
         self.decoder = LGRLSeqDecoder(vocab_size, args)
 
     def encode(self, input_grid, output_grid):
-        return self.task_encoder(input_grid, output_grid)
+        return self.encoder(input_grid, output_grid)
 
     def decode(self, io_embed, outputs):
         return self.decoder(io_embed, outputs)
@@ -1794,36 +1335,27 @@ class LGRLKarel(nn.Module):
     def decode_token(self, token, state, memory, attentions=None):
         return self.decoder.decode_token(token, state, memory, attentions)
 
-def get_trace_encoder(args):
-    if args.karel_trace_enc.startswith('conv3d'):
-        trace_encoder = TimeConvTraceEncoder(args)
-    elif args.karel_trace_enc.startswith('lstm'):
-        trace_encoder = RecurrentTraceEncoder(args)
-    elif args.karel_trace_enc == 'none' or args.karel_trace_enc.startswith('aggregate'):
-        trace_encoder = lambda *args: None
-    else:
-        raise ValueError(args.karel_trace_enc)
-    return trace_encoder
-
-def get_code_encoder(args, vocab_size):
-        # code_encoder = CodeEncoderRL
-        if args.karel_code_enc == 'default':
-            code_encoder = CodeEncoder(vocab_size, args)
-        elif args.karel_code_enc == 'none':
-            code_encoder = lambda *args: None
-        else:
-            raise ValueError(args.karel_code_enc)
-        return code_encoder
-
 
 class LGRLRefineKarel(nn.Module):
     def __init__(self, vocab_size, args):
         super(LGRLRefineKarel, self).__init__()
         self.args = args
 
-        self.trace_encoder = get_trace_encoder(args)
+        if self.args.karel_trace_enc.startswith('conv3d'):
+            self.trace_encoder = TimeConvTraceEncoder(self.args)
+        elif self.args.karel_trace_enc.startswith('lstm'):
+            self.trace_encoder = RecurrentTraceEncoder(self.args)
+        elif self.args.karel_trace_enc == 'none' or self.args.karel_trace_enc.startswith('aggregate'):
+            self.trace_encoder = lambda *args: None
+        else:
+            raise ValueError(self.args.karel_trace_enc)
 
-        self.code_encoder = get_code_encoder(args, vocab_size)
+        if self.args.karel_code_enc == 'default':
+            self.code_encoder = CodeEncoder(vocab_size, args)
+        elif self.args.karel_code_enc == 'none':
+            self.code_encoder = lambda *args: None
+        else:
+            raise ValueError(self.args.karel_code_enc)
 
         if self.args.karel_refine_dec == 'default':
             self.decoder = LGRLSeqRefineDecoder(vocab_size, args)
@@ -1832,7 +1364,6 @@ class LGRLRefineKarel(nn.Module):
         else:
             raise ValueError(self.args.karel_refine_dec)
 
-        # task_encoder
         self.encoder = LGRLTaskEncoder(args)
 
     def encode(self, input_grid, output_grid, ref_code, ref_trace_grids,
@@ -1840,7 +1371,7 @@ class LGRLRefineKarel(nn.Module):
         # batch size x num pairs x 512
         io_embed = self.encoder(input_grid, output_grid)
         # PackedSequencePlus, batch size x length x 512
-        ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
+        ref_code_memory = self.code_encoder(ref_code, ref_trace_grids, ref_trace_events)
         # PackedSequencePlus, batch size x num pairs x length x  512
         ref_trace_memory = self.trace_encoder(ref_code_memory, ref_trace_grids,
                                               ref_trace_events, cag_interleave)
@@ -1853,26 +1384,3 @@ class LGRLRefineKarel(nn.Module):
 
     def decode_token(self, token, state, memory, attentions=None):
         return self.decoder.decode_token(token, state, memory, attentions)
-
-
-class LGRLClassifierKarel(nn.Module):
-    def __init__(self, vocab_size, args):
-        super(LGRLClassifierKarel, self).__init__()
-        self.args = args
-
-        self.trace_encoder = get_trace_encoder(args)
-
-        self.code_encoder = get_code_encoder(args, vocab_size)
-
-        self.decoder = LGRLClassifierDecoder(vocab_size, args)
-
-        # task_encoder
-        self.encoder = LGRLTaskEncoder(args)
-
-    def forward(self, input_grid, output_grid, ref_code, ref_trace_grids,
-                ref_trace_events, cag_interleave):
-        # batch size x num pairs x 512
-        io_embed = self.encoder(input_grid, output_grid)
-        # PackedSequencePlus, batch size x length x 512
-        ref_code_memory = self.code_encoder(ref_code, input_grid, output_grid, ref_trace_grids, ref_trace_events)
-        return self.decoder(io_embed, ref_code_memory)

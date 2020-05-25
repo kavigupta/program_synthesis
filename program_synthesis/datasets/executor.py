@@ -23,10 +23,10 @@ class ExecutorRuntimeException(Exception):
 
 def evaluate_code(code, arguments, tests, do_execute):
     stats = {'total': len(tests), 'correct': 0, 'exceptions': 0,
-             'result-none': 0, 'syntax-error': 0, 'runtime-exception': 0, 'individual' : [0] * len(tests)}
+             'result-none': 0, 'syntax-error': 0, 'runtime-exception': 0}
     if not code:
         return stats
-    for test_idx, test in enumerate(tests):
+    for test in tests:
         try:
             execution_result = do_execute(code, arguments, test['input'])
         except ExecutorSyntaxException:
@@ -45,7 +45,6 @@ def evaluate_code(code, arguments, tests, do_execute):
             stats['result-none'] += 1
         if execution_result.result == test['output']:
             stats['correct'] += 1
-            stats['individual'][test_idx] = 1
     return stats
 
 
@@ -58,10 +57,6 @@ KarelEvent = collections.namedtuple('KarelEvent', [
     'cond_value', # True/False for if/ifElse, remaining iters for repeat
     'success', # False if action failed or loop will repeat forever
 ])
-
-ACTIONS = {x.lower() for x in ('move', 'turnRight', 'turnLeft', 'pickMarker', 'putMarker')}
-REPEATS = {'repeat'}
-BRANCHES = {x.lower() for x in ('ifElse', 'while', 'if')}
 
 
 class KarelExecutor(object):
@@ -122,7 +117,7 @@ class KarelExecutor(object):
                 compiled = self.code_cache[code]
             compiled()
         except KarelSyntaxError:
-            raise ExecutorSyntaxException(str(code))
+            raise ExecutorSyntaxException
         except (TimeoutError, ExecutorRuntimeException) as e:
             if not record_trace:
                 if isinstance(e, TimeoutError):
@@ -163,12 +158,9 @@ class KarelExecutor(object):
                             repeat_found = True
                             break
                     if not repeat_found:
-                        pass
-                        # TODO stopgap to prevent errors
-                        #print(trace.events)
-                        #raise Exception(
-                        #        'Karel timeout with neither while nor repeat. '
-                        #        'Code: ' + ' '.join(code))
+                        raise Exception(
+                                'Karel timeout with neither while nor repeat. '
+                                'Code: ' + ' '.join(code))
                     del trace.events[i+1:]
                     trace.events[-1] = KarelEvent(
                            *(trace.events[-1][:-1] + (False,)))
@@ -194,38 +186,6 @@ class KarelExecutor(object):
                 return ExecutionResult(None, trace)
 
         return ExecutionResult(np.where(field.ravel())[0].tolist(), trace)
-
-    def gather_coverage(self, datum, result):
-        try:
-            program_length = len(result['output'])
-            coverage = [dict(action=[0] * program_length, repeat=[0] * program_length, branch=[[0, 0]] * program_length)
-                        for _ in range(len(datum.input_tests))]
-
-            for test_idx, test in enumerate(datum.input_tests):
-                events = self.execute(result['output'], None, test['input'], record_trace=True).trace.events
-                for event in events:
-                    start, end = event.span
-                    if event.type.lower() in ACTIONS:
-                        assert start == end
-                        coverage[test_idx]['action'][start] = 1
-                    elif event.type.lower() in REPEATS:
-                        coverage[test_idx]['repeat'][start] = 1
-                    elif event.type.lower() in BRANCHES:
-                        coverage[test_idx]['branch'][start][event.cond_value] = 1
-                    else:
-                        raise RuntimeError("unrecognized", event)
-
-            return dict(
-                classification=dict(
-                    action=[token.lower() in ACTIONS for token in result['output']],
-                    repeat=[token.lower() in REPEATS for token in result['output']],
-                    branch=[token.lower() in BRANCHES for token in result['output']]
-                ),
-                coverage=coverage
-            )
-
-        except ExecutorSyntaxException:
-            return None
 
 
 def get_executor(args):

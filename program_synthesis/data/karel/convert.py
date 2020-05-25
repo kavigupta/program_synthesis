@@ -1,6 +1,6 @@
 import argparse
 import json
-import pickle
+import cPickle as pickle
 import struct
 
 import numpy as np
@@ -17,8 +17,8 @@ if __name__ == '__main__':
     parser.add_argument('output')
     args = parser.parse_args()
 
-    f = open(args.output, 'wb')
-    index_f = open(args.output + '.index', 'wb')
+    f = open(args.output, 'w')
+    index_f = open(args.output + '.index', 'w')
     for i, line in tqdm.tqdm(enumerate(open(args.input))):
         obj = json.loads(line)
         offset = f.tell()

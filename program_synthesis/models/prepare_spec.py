@@ -20,14 +20,6 @@ def lists_to_numpy(lsts, stoi, default_value):
             data[i, j] = stoi(element)
     return data
 
-def lists_to_numpy_novocab(lsts, default_value):
-    max_length = max(lengths(lsts))
-    data = np.full((len(lsts), max_length), default_value, dtype=np.int64)
-    for i, lst in enumerate(lsts):
-        for j, element in enumerate(lst):
-            data[i, j] = element
-    return data
-
 
 def numpy_to_tensor(arr, cuda, volatile):
     t = torch.LongTensor(arr)
@@ -39,7 +31,6 @@ def numpy_to_tensor(arr, cuda, volatile):
 class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         ['ps', 'lengths', 'sort_to_orig', 'orig_to_sort'])):
     def __new__(cls, ps, lengths, sort_to_orig, orig_to_sort):
-        assert isinstance(ps.batch_sizes, (torch.LongTensor, torch.Tensor))
         sort_to_orig = np.array(sort_to_orig)
         orig_to_sort = np.array(orig_to_sort)
         self = super(PackedSequencePlus, cls).__new__(cls,
@@ -119,8 +110,6 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
         orig_to_sort = [
             exp_i for i in self.orig_to_sort for exp_i in range(i * k, i * k + k)
         ]
-
-        batch_sizes = torch.tensor(batch_sizes, dtype=torch.long)
         return PackedSequencePlus(
                 torch.nn.utils.rnn.PackedSequence(ps_data, batch_sizes),
                 lengths, sort_to_orig, orig_to_sort)
@@ -133,10 +122,12 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
     def cat_with_list(self, other):
         """
         Concatenate this and the given list of sequences. These must have identical shapes and lengths for each item
+
+        Currently only works for 1d data
         """
         assert list(self.orig_lengths()) == [x.shape[0] for x in other], "lengths of sequences do not match"
+        assert all(len(x.shape) == 2 for x in other), "input data is not 1d"
         assert len({x.shape[1:] for x in other}) == 1, "input data's embedding dimension is non-homogenous"
-        assert other[0].shape[2:] == self.ps.data.shape[2:], "should match at indices other than 1"
 
         new_data = Variable(torch.zeros([self.ps.data.shape[0], *other[0].shape[1:]]))
         if self.ps.data.is_cuda:
@@ -147,26 +138,14 @@ class PackedSequencePlus(collections.namedtuple('PackedSequencePlus',
             if self.ps.data.is_cuda:
                 indices = indices.cuda()
 
-            new_data[indices] = tens
+            new_data.scatter_(0, indices.unsqueeze(-1).repeat(1, new_data.shape[-1]), tens)
 
         cat_data = torch.cat([new_data, self.ps.data], dim=1)
         cat_ps = torch.nn.utils.rnn.PackedSequence(
-            cat_data,
-            self.ps.batch_sizes
+            data=cat_data,
+            batch_sizes=self.ps.batch_sizes
         )
         return self.with_new_ps(cat_ps)
-
-    def cat_with_item(self, items):
-        """
-        Concatenate this sequnce with each item, where the item is spread across the sequence.
-
-        Works for all dimensions of data, it just needs to line up with the outputs correctly
-        """
-        assert len(items) == len(list(self.orig_lengths()))
-        return self.cat_with_list([
-            item.unsqueeze(0).repeat(length, *([1] * len(item.shape)))
-            for item, length in zip(items, self.orig_lengths())
-        ])
 
 
 
@@ -309,7 +288,6 @@ def lists_to_packed_sequence(lists, stoi, cuda, volatile):
 
     v = numpy_to_tensor(lists_to_numpy(lists_sorted, stoi, 0), cuda, volatile)
     lens = lengths(lists_sorted)
-    lens = torch.tensor(lens, dtype=torch.long)
     return PackedSequencePlus(
         torch.nn.utils.rnn.pack_padded_sequence(
             v, lens, batch_first=True),

@@ -3,7 +3,6 @@ import math
 import sys
 import os
 import time
-from itertools import count
 
 import numpy as np
 
@@ -12,7 +11,7 @@ import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
 
-#from pytorch_tools import torchfold
+from pytorch_tools import torchfold
 
 from datasets import data, executor
 from tools import saver
@@ -54,27 +53,6 @@ class InferenceResult(object):
             'code_sequence': self.code_sequence,
         }
 
-    @staticmethod
-    def dovetail(inference_results):
-        """
-        Combines several inference results together via dovetailing. Only works if the `info` contains
-        beams of the form info['trees_checked'], and info['candidates'] == [list of candidates,,,]
-        """
-        assert inference_results
-        code_tree = inference_results[0].code_tree
-        code_sequence = inference_results[0].code_sequence
-        assert all(res.info.keys() == {'trees_checked', 'candidates'} for res in inference_results)
-        candidates = []
-        for i in count():
-            done = True
-            for res in inference_results:
-                if i < len(res.info['candidates']):
-                    candidates.append(res.info['candidates'][i])
-                    done = False
-            if done:
-                break
-        trees_checked = sum(res.info['trees_checked'] for res in inference_results)
-        return InferenceResult(code_tree=code_tree, code_sequence=code_sequence, info=dict(trees_checked=trees_checked, candidates=candidates))
 
 class BaseModel(object):
 
@@ -89,24 +67,12 @@ class BaseModel(object):
             self.model_dir, map_to_cpu=args.restore_map_to_cpu,
             step=getattr(args, 'step', None))
         if self.last_step == 0 and args.pretrained:
-            for kind_path in args.pretrained.split(':_:'):
-                kind, path = kind_path.split('::')
+            for kind_path in args.pretrained.split(','):
+                kind, path = kind_path.split(':')
                 self.load_pretrained(kind, path)
 
     def load_pretrained(self, kind, path):
-        if kind == 'entire-model':
-            keep_weight = lambda x: True
-        elif kind == 'encoder':
-            keep_weight = lambda x: {'encoder': True, 'code_encoder': True, 'decoder': False, 'optimizer': False}[
-                x.split(".")[0]]
-        else:
-            raise NotImplementedError
-
-        step = self.saver.restore(path, map_to_cpu=self.args.restore_map_to_cpu,
-                                  step=self.args.pretrained_step, keep_weight=keep_weight)
-        assert step == self.args.pretrained_step, "Step {} of model {} does not work".format(path,
-                                                                                             self.args.pretrained_step)
-
+        raise NotImplementedError
 
     def compute_loss(self, batch):
         raise NotImplementedError
@@ -131,7 +97,7 @@ class BaseModel(object):
             self.debug(batch)
         if self.last_step % self.save_every_n == 0:
             self.saver.save(self.model_dir, self.last_step)
-        return {'loss': loss.data.item()}
+        return {'loss': loss.data[0]}
 
     def eval(self, batch):
         results = self.inference(batch)

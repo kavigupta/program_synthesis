@@ -18,8 +18,8 @@ class ArgsDict(dict):
             self[key] = value
         self.__dict__ = self
 
-#(*) TODO Make our sl model loadable in the rl context: task,code encoder + embedding loads
-def load_checkpoint(model, optimizer, model_dir, map_to_cpu=False, step=None, keep_weight=lambda x: True):
+
+def load_checkpoint(model, optimizer, model_dir, map_to_cpu=False, step=None):
     path = os.path.join(model_dir, 'checkpoint')
     if step is not None:
         path += '-{:08d}'.format(step)
@@ -31,15 +31,11 @@ def load_checkpoint(model, optimizer, model_dir, map_to_cpu=False, step=None, ke
         else:
             checkpoint = torch.load(path)
         old_state_dict = model.state_dict()
-        for key in list(checkpoint['model'].keys()):
-            if not keep_weight(key):
-                del checkpoint['model'][key]
         for key in old_state_dict.keys():
             if key not in checkpoint['model']:
                 checkpoint['model'][key] = old_state_dict[key]
         model.load_state_dict(checkpoint['model'])
-        if keep_weight('optimizer'):
-            optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
         return checkpoint.get('step', 0)
     return 0
 
@@ -104,14 +100,14 @@ class Saver(object):
         self._optimizer = optimizer
         self._keep_every_n = keep_every_n
 
-    def restore(self, model_dir, map_to_cpu=False, step=None, keep_weight=lambda x: True):
+    def restore(self, model_dir, map_to_cpu=False, step=None):
         """Restores model and optimizer from given directory.
 
         Returns:
            Last training step for the model restored.
         """
         last_step = load_checkpoint(
-            self._model, self._optimizer, model_dir, map_to_cpu, step, keep_weight=keep_weight)
+            self._model, self._optimizer, model_dir, map_to_cpu, step)
         return last_step
 
     def save(self, model_dir, step):

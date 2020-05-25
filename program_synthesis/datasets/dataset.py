@@ -15,7 +15,7 @@ import torch.utils.data
 import data
 from . import executor
 from . import stats
-from .karel.mutation import KarelExampleMutator, KarelOutputRefExampleMutator, KarelGoldReplaceMutator
+from .karel.mutation import KarelExampleMutator
 
 
 Schema = collections.namedtuple("Schema", ["args", "return_type"])
@@ -106,15 +106,13 @@ class KarelExample(object):
         'input_tests',
         'tests',
         'text',
-        'ref_example',
-        'code_is_correct',
-        'ref_beams' )
+        'ref_example', )
     schema = Schema(None, None)
     code_tree = []
     _empty_trace = executor.KarelTrace([], [])
 
     def __init__(self, idx, guid, code_sequence, input_tests, tests,
-            ref_example=None, code_is_correct=None, ref_beams=None):
+            ref_example=None):
         self.idx = idx
         self.guid = guid
         self.code_sequence = code_sequence
@@ -122,8 +120,6 @@ class KarelExample(object):
         self.tests = tests
         self.text = code_sequence
         self.ref_example = ref_example
-        self.code_is_correct = code_is_correct
-        self.ref_beams = ref_beams
 
     @classmethod
     def from_dict(cls, d):
@@ -144,10 +140,8 @@ class KarelExample(object):
             ref_example = KarelExample.from_dict(ref_dict)
         else:
             ref_example = None
-        code_is_correct = d.get('code_is_correct')
-        ref_beams = d.get('ref_beams')
         return cls(d.get('id', None), d['guid'], d['code'], all_examples[:5], all_examples[5:],
-                 ref_example, code_is_correct, ref_beams)
+                ref_example)
 
     def to_dict(self):
         return {
@@ -159,9 +153,7 @@ class KarelExample(object):
                 'trace_grids': example.get('trace', self._empty_trace).grids,
             } for example in self.input_tests + self.tests],
             'code': self.code_sequence,
-            'ref': self.ref_example.to_dict() if self.ref_example else None,
-            'code_is_correct' : self.code_is_correct,
-            'ref_beams' : self.ref_beams
+            'ref': self.ref_example.to_dict() if self.ref_example else None
         }
 
 
@@ -403,11 +395,9 @@ class NearDataset(Dataset):
 
 class KarelTorchDataset(torch.utils.data.Dataset):
 
-    def __init__(self, filename, mutator=lambda x: x, incorrect_mutator=None, replace_gold=None):
+    def __init__(self, filename, mutator=lambda x: x):
         self.filename = filename
         self.mutator = mutator
-        self.incorrect_mutator = incorrect_mutator
-        self.replace_gold = replace_gold
 
         self.file = None
         self.index = []
@@ -419,30 +409,14 @@ class KarelTorchDataset(torch.utils.data.Dataset):
                 offset, = struct.unpack('<Q', offset)
                 self.index.append(offset)
 
-        if incorrect_mutator is not None:
-            self.index = incorrect_mutator.filter_index(self.index)
-
-        if replace_gold is not None:
-            self.index = replace_gold.filter_index(self.index, self._get_raw_example)
-
     def __len__(self):
         return len(self.index)
 
     def __getitem__(self, idx):
-        example = self._get_raw_example(idx)
-        if self.incorrect_mutator is not None:
-            example = self.incorrect_mutator(idx, example)
-        if self.replace_gold is not None:
-            example = self.replace_gold(example)
-        example = self.mutator(example)
-        return example
-
-    def _get_raw_example(self, idx):
         if self.file is None:
             self.file = open(self.filename, "rb")
         self.file.seek(self.index[idx])
-        example = KarelExample.from_dict(pickle.load(self.file, encoding='latin1'))
-        return example
+        return self.mutator(KarelExample.from_dict(pickle.load(self.file, encoding='latin1')))
 
 
 class KarelDataset(object):
@@ -495,74 +469,24 @@ def get_algolisp_dataset(args, _):
     return train_data, dev_data
 
 
-def karel_output_ref_mutator_mode(args):
-    if args.model_type == 'karel-lgrl-overfit':
-        return 'overfit-check'
-    elif args.iterative_search_use_overfit_model is not None:
-        return 'all'
-    return 'debugger'
-
-
-def get_karel_dataset(args, model, eval_on_train=False):
+def get_karel_dataset(args, model):
     suffix = args.dataset[5:]
-
-    file_ref = args.karel_file_ref_train is not None or args.karel_file_ref_val is not None
-    assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided "
-
-    add_trace = args.karel_trace_enc != 'none'
-    mode = karel_output_ref_mutator_mode(args)
 
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
         train_mutator = KarelExampleMutator(mutation_dist, rng_fixed=False,
-                                            add_trace=add_trace)
+                add_trace=args.karel_trace_enc != 'none')
         dev_mutator = KarelExampleMutator(mutation_dist, rng_fixed=True,
-                                          add_trace=add_trace)
-    else:
-        train_mutator = dev_mutator = lambda x: x
-
-    train_data = torch.utils.data.DataLoader(
-        KarelTorchDataset(
-            relpath('../data/karel/train{}.pkl'.format(suffix)),
-            train_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_train, add_trace, mode, for_eval=eval_on_train, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams),
-            KarelGoldReplaceMutator.from_path(args.karel_gold_replace_train)),
-        args.batch_size,
-        collate_fn=model.batch_processor(for_eval=eval_on_train),
-        num_workers=0 if args.load_sync else 4,
-        pin_memory=False)
-    dev_data = torch.utils.data.DataLoader(
-        KarelTorchDataset(
-            relpath('../data/karel/val{}.pkl'.format(suffix)),
-            dev_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode, for_eval=True, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=False)),
-        args.batch_size,
-        collate_fn=model.batch_processor(for_eval=True),
-        num_workers=0 if args.load_sync else 2,
-        pin_memory=False)
-    return train_data, dev_data
-
-
-def get_karel_dataset_nomodel(args, KarelLGRLRefineBatchProcessor=None):
-    suffix = args.dataset[5:]
-
-    if args.karel_mutate_ref:
-        mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
-        train_mutator = KarelExampleMutator(mutation_dist, rng_fixed=False,
-                add_trace=args.karel_trace_enc != 'none')
-        dev_mutator = KarelExampleMutator(mutation_dist, rng_fixed=False,
                 add_trace=args.karel_trace_enc != 'none')
     else:
         train_mutator = dev_mutator = lambda x: x
-    if KarelLGRLRefineBatchProcessor == None:
-        KarelLGRLRefineBatchProcessor = lambda x: x
 
     train_data = torch.utils.data.DataLoader(
         KarelTorchDataset(
             relpath('../data/karel/train{}.pkl'.format(suffix)),
             train_mutator),
         args.batch_size,
-        collate_fn=KarelLGRLRefineBatchProcessor,
+        collate_fn=model.batch_processor(for_eval=False),
         num_workers=0 if args.load_sync else 4,
         pin_memory=False)
     dev_data = torch.utils.data.DataLoader(
@@ -570,11 +494,10 @@ def get_karel_dataset_nomodel(args, KarelLGRLRefineBatchProcessor=None):
             relpath('../data/karel/val{}.pkl'.format(suffix)),
             dev_mutator),
         args.batch_size,
-        collate_fn=KarelLGRLRefineBatchProcessor,
+        collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2,
         pin_memory=False)
     return train_data, dev_data
-    #
 
 
 def get_algolisp_eval_dataset(args, _):
@@ -585,27 +508,17 @@ def get_algolisp_eval_dataset(args, _):
 
 def get_karel_eval_dataset(args, model):
     suffix = args.dataset[5:]
-
-    assert args.karel_file_ref_train is None, "cannot be used in this context"
-
-    file_ref = args.karel_file_ref_val is not None
-    assert not (args.karel_mutate_ref and file_ref), "karel_mutate_ref and karel_file_ref cannot both be provided but were {} and {}".format(args.karel_mutate_ref, file_ref)
-
-    add_trace = args.karel_trace_enc != 'none'
-    mode = karel_output_ref_mutator_mode(args)
-
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
         dev_mutator = KarelExampleMutator(mutation_dist, rng_fixed=True,
-                                          add_trace=add_trace)
+                add_trace=args.karel_trace_enc != 'none')
     else:
         dev_mutator = lambda x: x
 
     dev_data = torch.utils.data.DataLoader(
         KarelTorchDataset(
             relpath('../data/karel/val{}.pkl'.format(suffix)),
-            dev_mutator,
-            KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode, for_eval=True, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams)),
+            dev_mutator),
         args.batch_size,
         collate_fn=model.batch_processor(for_eval=True),
         num_workers=0 if args.load_sync else 2)
@@ -613,10 +526,6 @@ def get_karel_eval_dataset(args, model):
 
 
 def get_karel_eval_final_dataset(args, model):
-
-    assert args.karel_file_ref_train is None, "cannot be used in this context"
-    assert args.karel_file_ref_val is None, "cannot be used in this context"
-
     suffix = args.dataset[5:]
     if args.karel_mutate_ref:
         mutation_dist = [float(x) for x in args.karel_mutate_n_dist.split(',')]
@@ -644,11 +553,11 @@ def set_vocab(args):
         raise ValueError("Unknown dataset %s" % args.dataset)
 
 
-def get_dataset(args, model, eval_on_train=False):
+def get_dataset(args, model):
     if args.dataset == 'algolisp':
         return get_algolisp_dataset(args, model)
     elif args.dataset.startswith('karel'):
-        return get_karel_dataset(args, model, eval_on_train=eval_on_train)
+        return get_karel_dataset(args, model)
     else:
         raise ValueError("Unknown dataset %s" % args.dataset)
 

@@ -92,7 +92,6 @@ class Parser(object):
 
     def parse(self, code,  **kwargs):
         self.cond_block_spans = []
-        self.action_spans = []
         if isinstance(code, (list, tuple)):
             return self.yacc.parse(None,
                     tokenfunc=self.token_list_to_tokenfunc(code), **kwargs)

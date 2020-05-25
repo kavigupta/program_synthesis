@@ -107,15 +107,3 @@ def get_rng(rng, seed=123):
     if rng is None:
         rng = np.random.RandomState(seed)
     return rng
-
-
-def chunked(items, chunk_size):
-    assert chunk_size > 0
-    current = []
-    for x in items:
-        current.append(x)
-        if len(current) == chunk_size:
-            yield current
-            current = []
-    if current:
-        yield current
