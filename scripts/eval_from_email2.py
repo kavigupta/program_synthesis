@@ -166,7 +166,7 @@ def compute_batch_size(is_vanilla, count, max_gpu_memory):
         b = 1721 - 24 * m
     else:
         m = (5585 - 4057) / (36 - 24)
-        b = 4057 - 24 * m
+        b = 4057 - 24 * m + 1000 # just add a bit extra in case
     # 0.9 for wiggle room
     batch_size = (max_gpu_memory * 0.9 - b * count) / m
     return int(batch_size)
