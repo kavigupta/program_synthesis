@@ -23,6 +23,12 @@ def valid_checkpoints():
             continue
         if "finetuned-rl-1e-5-use-heldout," in logdir:
             continue
+        if "vanilla-real-nearai-finetuned-1e-5," in logdir:
+            continue
+        if "aggregate-with-io-real-nearai-finetuned-1e-5," in logdir:
+            continue
+        if "finetuned-agg" in logdir:
+            continue
         short_name = logdir.split("/")[-1].split(",")[0]
         if any(short_name.startswith("%s-%s" % (a, b)) for a in ("vanilla", "aggregate-with-io") for b in "123"):
             ensemble_names.add(re.sub("(vanilla|aggregate-with-io)-[123]", "\\1-#", short_name))
