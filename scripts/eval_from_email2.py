@@ -115,6 +115,9 @@ def valid_modes_and_params():
 #                                     continue
                                 if model == 'nearai':
                                     continue
+                            else:
+                                if model == "nearai32":
+                                    continue
                             render_extra = '' if extra == '' else ',,start-with-beams'
                             for overfit_model, overfit_cmd in overfit_models_to_use():
                                 if overfit_model == '':
