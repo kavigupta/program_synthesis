@@ -252,7 +252,7 @@ def main(args):
                 command += '--restore-map-to-cpu --no-cuda '
 
             if is_overfit_model:
-                priority = 1
+                continue # given up on these
             elif index_last == 0 and is_multiple(ckpt_number, 25000):
                 priority = 11
             elif not any(already_executed(output_path_pattern % other_step) or output_path_pattern % other_step in planned for _, other_step in chunk):
@@ -268,7 +268,7 @@ def main(args):
                 # really fast, might as well do it immediately
                 priority -= 17
             if "overfit=" in command:
-                priority += 1000
+                continue # given up on these
             if '#' in logdir:
                 priority += 500
             if search_param and search_param[1] >= 50:
