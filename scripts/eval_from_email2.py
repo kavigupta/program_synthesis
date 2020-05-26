@@ -30,8 +30,12 @@ def valid_checkpoints():
         if "finetuned-agg" in logdir:
             continue
         short_name = logdir.split("/")[-1].split(",")[0]
-        if any(short_name.startswith("%s-%s" % (a, b)) for a in ("vanilla", "aggregate-with-io") for b in "123"):
-            ensemble_names.add(re.sub("(vanilla|aggregate-with-io)-[123]", "\\1-#", short_name))
+        ensemble_regex = "^(vanilla|aggregate-with-io)-[123]($|,|-)"
+        if re.match(ensemble_regex, short_name):
+            ensemble_names.add(re.sub(ensemble_regex, "\\1-#\\2", short_name))
+            if short_name not in {"vanilla-%s" % b for b in "1"}:
+                continue
+        elif "123" in short_name:
             continue
 
         numbers = get_checkpoint_numbers(logdir)
