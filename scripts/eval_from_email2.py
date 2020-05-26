@@ -17,8 +17,6 @@ def valid_checkpoints():
     for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
         if "logdirs/baseline_model" in logdir:
             continue
-        if "many-mutations" in logdir:
-            continue
         if "finetuned-rl-1e-5," in logdir:
             continue
         if "finetuned-rl-1e-5-use-heldout," in logdir:
@@ -251,6 +249,8 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
+            if mode == "real" and "many-mutations" in logdir:
+                continue
             if is_overfit_model:
                 continue # given up on these
             elif index_last == 0 and is_multiple(ckpt_number, 25000):
