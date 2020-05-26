@@ -108,7 +108,7 @@ def valid_modes_and_params():
             for param in params:
                 yield (mode, param, param), 'always', ''
         elif mode in {'real', 'realtrain'}:
-            for model in 'nearai', 'nearai32':
+            for model in 'nearai', 'nearai32', "egnps64":
                 yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25, 50, 100:
                     for strategy in 'greedy', 'best_first':
@@ -130,7 +130,7 @@ def valid_modes_and_params():
                                     render_extra_with = render_extra
                                     extra_with = extra
                                 else:
-                                    if strategy != 'best_first' or limit != 25 or model != "nearai32":
+                                    if strategy != 'best_first' or limit != 25 or model == "nearai":
                                         continue
                                     render_extra_with = render_extra + ',,overfit=' + overfit_model
                                     extra_with = extra + " " + overfit_cmd
@@ -273,6 +273,8 @@ def main(args):
                 priority += 500
             if search_param and search_param[1] >= 50:
                 priority += 30
+            if model_data == "egnps64":
+                priority += 45
             planned.add(output_path)
             by_priority.append((priority, command))
     by_priority.sort()
