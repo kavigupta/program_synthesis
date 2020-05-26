@@ -43,6 +43,8 @@ def valid_checkpoints():
         yield from valid_checkpoints_for_logdir(logdir, numbers)
 
     for name in ensemble_names:
+        if "old" not in name:
+            continue
         logdir = "logdirs/" + name + ",*"
         actual_logdirs = [x for number in "123" for x in glob.glob(logdir.replace("#", number))]
         checkpoints_per = [set(get_checkpoint_numbers(logdir)) for logdir in actual_logdirs]
