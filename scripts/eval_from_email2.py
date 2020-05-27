@@ -102,7 +102,7 @@ def is_multiple(ckpt_number, interval):
 def valid_modes_and_params():
     for mode in 'train', 'eval', 'real', 'realtrain':
         if mode in {'train', 'eval'}:
-            params = '1', '0,1', '0,0,1'
+            params = '1', '0,1', '0,0,1', '0,0,0,1', '0,0,0,0,1'
             for param in params:
                 yield (mode, param, param), 'always', ''
         elif mode in {'real', 'realtrain'}:
