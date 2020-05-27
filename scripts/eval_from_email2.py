@@ -270,11 +270,10 @@ def main(args):
             if "overfit=" in command:
                 continue # given up on these
             if '#' in logdir:
-                priority += 500
+                # don't deprioritize these too much we want to see the results
+                priority += 20
             if search_param and search_param[1] >= 50:
                 priority += 30
-            if model_data == "egnps64":
-                priority += 45
             planned.add(output_path)
             by_priority.append((priority, command))
     by_priority.sort()
