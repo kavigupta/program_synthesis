@@ -223,7 +223,7 @@ def main(args):
             )
 
             command += extra_args + ' '
-            search_param = ''
+            model_data = search_param = ''
             if mode == 'real' or mode == 'realtrain':
                 model_data, search_param = param
                 command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
