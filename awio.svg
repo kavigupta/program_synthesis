@@ -16,7 +16,7 @@
    id="svg8"
    inkscape:version="0.92.4 (5da689c313, 2019-01-14)"
    sodipodi:docname="awio.svg"
-   inkscape:export-filename="/home/kavi/program_synthesis/awio-with-lstm.png"
+   inkscape:export-filename="/home/kavi/program_synthesis/awio-diagram.png"
    inkscape:export-xdpi="89.718803"
    inkscape:export-ydpi="89.718803">
   <defs
@@ -1794,9 +1794,9 @@
      borderopacity="1.0"
      inkscape:pageopacity="0.0"
      inkscape:pageshadow="2"
-     inkscape:zoom="1.4"
-     inkscape:cx="375.76882"
-     inkscape:cy="402.48907"
+     inkscape:zoom="0.98994949"
+     inkscape:cx="259.05965"
+     inkscape:cy="704.65031"
      inkscape:document-units="mm"
      inkscape:current-layer="layer1"
      showgrid="false"
@@ -2067,14 +2067,14 @@
         <text
            xml:space="preserve"
            style="font-style:normal;font-weight:normal;font-size:7.4083333px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.18520834"
-           x="20.367941"
-           y="134.24489"
+           x="14.521407"
+           y="132.00188"
            id="text757-7"><tspan
              sodipodi:role="line"
              id="tspan755-4"
-             x="20.367941"
-             y="134.24489"
-             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.45722198px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">while</tspan></text>
+             x="14.521407"
+             y="132.00188"
+             style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.4083333px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">while</tspan></text>
       </g>
       <path
          sodipodi:nodetypes="cc"
@@ -2110,14 +2110,14 @@
       <text
          xml:space="preserve"
          style="font-style:normal;font-weight:normal;font-size:7.4083333px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.18520834"
-         x="51.777046"
+         x="39.222202"
          y="121.66268"
          id="text757-7-3"><tspan
            sodipodi:role="line"
            id="tspan755-4-7"
-           x="51.777046"
+           x="39.222202"
            y="121.66268"
-           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.45722198px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">REPLACE(if)</tspan></text>
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.4083333px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">REPLACE(if)</tspan></text>
     </g>
     <path
        style="fill:none;fill-rule:evenodd;stroke:#000000;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#Arrow2Mstart-5);marker-end:url(#Arrow2Mend-8-98-0-7-9-9)"
@@ -2213,7 +2213,7 @@
                  height="39.395943"
                  width="86.368042"
                  id="rect821-5-4" /></flowRegion><flowPara
-               id="flowPara823-8-8">Input 1</flowPara></flowRoot>          <g
+               id="flowPara823-8-8">Input 2</flowPara></flowRoot>          <g
              id="g830-3-1-9"
              transform="translate(34.669242,131.3689)">
             <rect
@@ -2236,7 +2236,7 @@
                    height="39.395943"
                    width="86.368042"
                    id="rect821-5-3-3" /></flowRegion><flowPara
-                 id="flowPara823-8-9-0">Output 1</flowPara></flowRoot>          </g>
+                 id="flowPara823-8-9-0">Output 2</flowPara></flowRoot>          </g>
         </g>
       </g>
       <g
@@ -2576,7 +2576,7 @@
                      x="67.175148"
                      y="434.6058"
                      style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:16px;font-family:sans-serif;-inkscape-font-specification:sans-serif" /></flowRegion><flowPara
-                   id="flowPara823-8-7-2-9-6">Input 1</flowPara></flowRoot>              <g
+                   id="flowPara823-8-7-2-9-6">Input 2</flowPara></flowRoot>              <g
                  transform="translate(-11.12088,-15.645947)"
                  id="g830-3-1-91-9-4-1">
                 <rect
@@ -2599,7 +2599,7 @@
                        x="67.175148"
                        y="434.6058"
                        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:16px;font-family:sans-serif;-inkscape-font-specification:sans-serif" /></flowRegion><flowPara
-                     id="flowPara823-8-9-9-3-1-9">Output 1</flowPara></flowRoot>              </g>
+                     id="flowPara823-8-9-9-3-1-9">Output 2</flowPara></flowRoot>              </g>
               <g
                  transform="translate(-11.12088,-5.645947)"
                  id="g830-3-1-91-2-6-8-9">
@@ -3141,10 +3141,10 @@
        sodipodi:nodetypes="cc"
        inkscape:connector-curvature="0"
        id="path925-1-4-3-2-8-0-8-7-4-2-1"
-       d="m 34.115525,179.69634 4.806331,1.05142"
+       d="m 33.747883,179.69634 5.173973,1.05142"
        style="fill:none;fill-rule:evenodd;stroke:#948700;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Mend-8-98-0-7-5-96-7-7-9-8-3)" />
     <g
-       transform="translate(69.346019)"
+       transform="translate(69.439563)"
        id="g35293-2">
       <path
          sodipodi:nodetypes="ccccc"
@@ -3405,25 +3405,25 @@
            style="font-size:14.66666698px">...</flowPara></flowRoot>      <text
          xml:space="preserve"
          style="font-style:normal;font-weight:normal;font-size:7.4083333px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.18520834"
-         x="66.739258"
-         y="234.12421"
+         x="63.836636"
+         y="230.71939"
          id="text757"><tspan
            sodipodi:role="line"
            id="tspan755"
-           x="66.739258"
-           y="234.12421"
-           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.45722198px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">(</tspan></text>
+           x="63.836636"
+           y="230.71939"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.4083333px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">c(</tspan></text>
       <text
          xml:space="preserve"
          style="font-style:normal;font-weight:normal;font-size:7.4083333px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.18520834"
-         x="58.626263"
+         x="53.899097"
          y="121.99458"
          id="text757-7-3-0"><tspan
            sodipodi:role="line"
            id="tspan755-4-7-3"
-           x="58.626263"
+           x="53.899097"
            y="121.99458"
-           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:3.45722198px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">KEEP</tspan></text>
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:7.4083333px;font-family:courier;-inkscape-font-specification:courier;stroke-width:0.18520834">KEEP</tspan></text>
     </g>
     <flowRoot
        transform="matrix(0.26458333,0,0,0.26458333,164.43789,79.34372)"
@@ -3443,23 +3443,23 @@
        sodipodi:nodetypes="czc"
        inkscape:connector-curvature="0"
        id="path925-1-4-3-2-8-0-8-7-4-2-1-6"
-       d="m 4.1349094,176.03782 c 0,0 10.2749236,-9.87674 21.0284316,-9.21099 10.753508,0.66574 14.60076,12.03976 14.60076,12.03976"
+       d="m 1.7994045,173.9873 c 0,0 12.6104285,-7.82622 23.3639365,-7.16047 10.753508,0.66574 14.60076,12.03976 14.60076,12.03976"
        style="fill:none;fill-rule:evenodd;stroke:#948700;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Mend-8-98-0-7-5-96-7-7-9-8-3-6)" />
     <path
-       sodipodi:nodetypes="cssc"
+       sodipodi:nodetypes="cc"
        inkscape:connector-curvature="0"
        id="path925-1-4-3-2-8-0-8-7-4-2-1-6-1"
-       d="m 0.25764962,169.61963 c 0,0 29.06196538,-5.42986 37.49223638,-4.90795 8.430271,0.52191 23.52874,6.30598 43.082887,10.78896 19.554147,4.48298 26.802577,3.58941 26.802577,3.58941"
+       d="m 1.7994045,185.09775 c 35.9585095,3.74402 72.5323915,3.02443 105.5270955,-3.9861"
        style="fill:none;fill-rule:evenodd;stroke:#948700;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Mend-8-98-0-7-5-96-7-7-9-8-3-6-2)" />
     <path
        sodipodi:nodetypes="csc"
        inkscape:connector-curvature="0"
        id="path925-1-4-3-2-8-0-8-7-4-2-1-9"
-       d="m 33.975554,183.10042 c 0,0 19.588995,6.75773 32.051871,6.98626 12.462875,0.22853 41.322465,-7.43155 41.322465,-7.43155"
+       d="m 33.747883,182.93506 c 0,0 19.816666,5.64978 32.279542,5.87831 12.462875,0.22853 41.322465,-6.15824 41.322465,-6.15824"
        style="fill:none;fill-rule:evenodd;stroke:#948700;stroke-width:0.26499999;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#Arrow2Mend-8-98-0-7-5-96-7-7-9-8-3-8)" />
     <path
        style="fill:none;stroke:#ff0000;stroke-width:0.60549998;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:0.60549999, 1.21099997;stroke-dashoffset:0;stroke-opacity:1"
-       d="M 153.03342,174.19926 H 44.554263 v -9.78958 h -62.838541 v 87.02146 h 58.711042 v -61.1798 H 153.02707 Z"
+       d="M 153.03342,174.19926 H 53.073846 v -9.78958 h -71.358124 v 87.02146 h 58.711042 v -61.1798 H 153.02707 Z"
        id="path831"
        inkscape:connector-curvature="0"
        sodipodi:nodetypes="ccccccccc" />
