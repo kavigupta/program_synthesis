@@ -24,7 +24,7 @@ def combine_prediction_results(results_per):
         combined[guid] = valid_programs
     return combined
 
-def run_model(*, model_id, step, beam_size, batch_size, dataset, segment):
+def run_model(*, model_id, step, beam_size, batch_size, dataset, segment, just_print_commands):
 
     predict_path="{dir}/{segment},{model_id},{step},{beam_size}.json".format(
         dir=TRAIN_OUTPUT_DIRECTORY,
@@ -53,12 +53,14 @@ def run_model(*, model_id, step, beam_size, batch_size, dataset, segment):
             maybe_eval_train="--eval-train" if segment.startswith("train") else ""
         )
         print(command_to_run)
+        if just_print_commands:
+            return None
         os.system(command_to_run)
 
     with open(predict_path) as f:
         return json.load(f)
 
-def get_combined_results(*, model_id_pattern, num_model, steps, segment, dataset, output_file, beam_size=64, batch_size=16):
+def get_combined_results(*, model_id_pattern, num_model, steps, segment, dataset, output_file, beam_size=64, batch_size=16, just_print_commands=False):
     assert not os.path.exists(output_file), "output file must not exist"
     if isinstance(steps, int):
         steps = [steps] * num_model
@@ -69,7 +71,8 @@ def get_combined_results(*, model_id_pattern, num_model, steps, segment, dataset
             beam_size=beam_size,
             batch_size=batch_size,
             dataset=dataset,
-            segment=segment
+            segment=segment,
+            just_print_commands=just_print_commands
         )
         for number, step in enumerate(steps)
     ]
