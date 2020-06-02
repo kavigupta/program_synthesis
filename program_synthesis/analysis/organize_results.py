@@ -28,6 +28,7 @@ def _add_processed_row(df_orig, df, model, data_source, s, k):
     row = filtered.iloc[0]
     df.append([model, data_source, s, k, 100 * (1 - row.Accuracy), 100 * (1 - row.Exact)])
 
+K_VALS = 1, 5, 10, 25, 50, 100, 200
 
 def separate_strategies(df_orig):
     df_orig = by_max_acc(df_orig)
@@ -35,7 +36,7 @@ def separate_strategies(df_orig):
     for data_source in "nearai", "nearai32", "egnps64":
         for model in set(df_orig.Model):
             for s in "G", "B":
-                for k in 1, 5, 10, 25, 50, 100:
+                for k in K_VALS:
                     _add_processed_row(df_orig, df, model, data_source, s, k)
             _add_processed_row(df_orig, df, model, data_source, "X", 1)
     return pd.DataFrame(df, columns=["model", "synthesizer", "strategy", "debugger steps", "gen error", "exact error"])
@@ -43,19 +44,21 @@ def separate_strategies(df_orig):
 def by_k(topline):
     columns_except_k = [col for col in topline if col != 'debugger steps' and col.split()[-1] != 'error']
     result = {}
-    k_vals = [1, 5, 10, 25, 50, 100]
     def set_value(key, k, row):
         if key not in result:
-            result[key] = list(key) + [''] * len(k_vals) * 2
-        loc = len(key) + k_vals.index(k)
+            result[key] = list(key) + [''] * len(K_VALS) * 2
+        loc = len(key) + K_VALS.index(k)
         assert result[key][loc] == ''
-        assert result[key][loc + len(k_vals)] == ''
+        assert result[key][loc + len(K_VALS)] == ''
         result[key][loc] = row['gen error']
-        result[key][loc + len(k_vals)] = row['exact error']
+        result[key][loc + len(K_VALS)] = row['exact error']
 
     for _, row in topline.iterrows():
         k = row['debugger steps']
         set_value(tuple(row[c] for c in columns_except_k), k, row)
     
-    columns = columns_except_k + ["gen error %s" % k for k in k_vals] + ["exact error %s" % k for k in k_vals]
+    columns = columns_except_k + ["gen error %s" % k for k in K_VALS] + ["exact error %s" % k for k in K_VALS]
     return pd.DataFrame(list(result.values()), columns=columns)
+
+def to_display_name(model):
+    return {"nearai" : "LGRL-GD", "nearai32" : "LGRL", "egnps64" : "EGNPS"}[model]
