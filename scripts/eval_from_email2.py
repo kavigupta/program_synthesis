@@ -25,8 +25,6 @@ def valid_checkpoints():
             continue
         if "aggregate-with-io-real-nearai-finetuned-1e-5," in logdir:
             continue
-        if "finetuned-agg" in logdir:
-            continue
         short_name = logdir.split("/")[-1].split(",")[0]
         ensemble_regex = "^(vanilla|aggregate-with-io)-[123]($|,|-)"
         if re.match(ensemble_regex, short_name):
