@@ -8,6 +8,15 @@ program_synthesis/karel/dataset/_parsetab.py
 # Logdirs
 
 logdirs
+logdirs-overfit
+train-results
+baseline
+coverages
+
+# notebooks
+
+notebooks/scratch.ipynb
+notebooks/img
 
 # Mac artifacts
 .DS_Store
