@@ -2,6 +2,7 @@ import glob
 import os
 import re
 import json
+from functools import lru_cache
 
 import pandas as pd
 from program_synthesis.datasets import dataset
@@ -17,8 +18,12 @@ def get_exact_match(path):
         result = dict(exact=num_exact_match, total=len(contents[1:]))
         with open(exact_match_path, "w") as f:
             json.dump(result, f)
-    with open(exact_match_path) as f:
-        return json.load(f)
+    try:
+        with open(exact_match_path) as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        print(exact_match_path)
+        raise
 
 def table_of_accuracies(label, pbar=lambda x: x):
     print(label)
@@ -45,7 +50,7 @@ def table_of_accuracies(label, pbar=lambda x: x):
             continue
         
         exact_match = get_exact_match(path)
-        assert exact_match['total'] == stats['total'], str((exact_match, stats))
+        assert exact_match['total'] == stats['total'], str((exact_match, stats, path))
         
         data.append([label, checkpoint, stats['correct'] / stats['total'], stats['total'], exact_match['exact'] / stats['total'], data_source, data_label])
     df = pd.DataFrame(
@@ -53,6 +58,7 @@ def table_of_accuracies(label, pbar=lambda x: x):
     )
     return df
 
+@lru_cache(None)
 def get_baseline_stats(model):
     path = "../baseline/{}-val.json".format(model)
     dset = dataset.KarelTorchDataset('../data/karel/val.pkl')
