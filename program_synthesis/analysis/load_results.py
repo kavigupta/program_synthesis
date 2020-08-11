@@ -30,7 +30,12 @@ def get_exact_match(path):
 
 def table_of_accuracies(label, pbar=lambda x: x):
     print(label)
-    logdirs =  glob.glob("../logdirs/{},*".format(label))
+    if "327" in label:
+        logdirs = ["../logdirs/" + label]
+    else:
+        logdirs =  glob.glob("../logdirs/{},*".format(label))
+    if "327" not in label:
+        logdirs = [l for l in logdirs if "327" not in l]
     if not logdirs:
         raise RuntimeError("nothing found {}".format(label))
     [logdir] = logdirs
