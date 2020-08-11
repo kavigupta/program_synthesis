@@ -67,9 +67,9 @@ def table_of_accuracies(label, pbar=lambda x: x):
     return df
 
 @lru_cache(None)
-def get_baseline_stats(model):
-    path = "../baseline/{}-val.json".format(model)
-    dset = dataset.KarelTorchDataset('../data/karel/val.pkl')
+def get_baseline_stats(model, segment="val"):
+    path = "../baseline/{}-{}.json".format(model, segment)
+    dset = dataset.KarelTorchDataset('../data/karel/{}.pkl'.format(segment))
     with open(path) as f:
         results = json.load(f)
     exact = sum(x['output'] == y.code_sequence for x, y in zip(results, dset))
