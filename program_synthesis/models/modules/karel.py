@@ -128,7 +128,7 @@ class LGRLTaskEncoder(nn.Module):
                 in_channels=64, out_channels=64, kernel_size=3, padding=1),
             nn.ReLU(), )
 
-        self.fc = nn.Linear(64 * 18 * 18, 512)
+        self.fc = nn.Linear(64 * 18 * 18, args.karel_hidden_size * 2)
 
     def forward(self, input_grid, output_grid):
         batch_dims = input_grid.shape[:-3]
@@ -596,12 +596,16 @@ class AugmentWithTrace(nn.Module):
         return self.trace_incorporator.output_embedding_size
 
 class DoNotAugmentWithTrace(nn.Module):
+    def __init__(self, hs):
+        super().__init__()
+        self.hs = hs
+
     def forward(self, inp_embed, *args, **kwargs):
         return inp_embed
 
     @property
     def output_embedding_size(self):
-        return 256
+        return self.hs
 
 def construct_augment_with_trace(strategy=AugmentWithTrace, **kwargs):
     return strategy(**kwargs)
@@ -611,8 +615,10 @@ class CodeEncoder(nn.Module):
         super(CodeEncoder, self).__init__()
 
         self._cuda = args.cuda
+        self.args = args
+        hs = args.karel_hidden_size
         # corresponds to self.token_embed
-        self.embed = nn.Embedding(vocab_size, 256)
+        self.embed = nn.Embedding(vocab_size, hs)
         if args.karel_trace_enc.startswith('aggregate'):
             if ":" in args.karel_trace_enc:
                 index = args.karel_trace_enc.index(":")
@@ -621,11 +627,11 @@ class CodeEncoder(nn.Module):
                 kwargs = {}
             self.augment_with_trace = construct_augment_with_trace(**kwargs)
         else:
-            self.augment_with_trace = DoNotAugmentWithTrace()
+            self.augment_with_trace = DoNotAugmentWithTrace(hs)
 
         self.encoder = nn.LSTM(
             input_size=self.augment_with_trace.output_embedding_size,
-            hidden_size=256,
+            hidden_size=hs,
             num_layers=2,
             bidirectional=True,
             batch_first=True)
@@ -637,7 +643,7 @@ class CodeEncoder(nn.Module):
         # output: PackedSequence, batch size x seq length x hidden (256 * 2)
         # state: 2 (layers) * 2 (directions) x batch x hidden size (256)
         output, state = self.encoder(inp_embed.ps,
-                                     lstm_init(self._cuda, 4, 256,
+                                     lstm_init(self._cuda, 4, self.args.karel_hidden_size,
                                                inp_embed.ps.batch_sizes[0]))
 
         return SequenceMemory(
@@ -1324,18 +1330,20 @@ class LGRLSeqRefineEditDecoder(nn.Module):
 
         num_ops = 4 + 2 * vocab_size
 
-        self.op_embed = nn.Embedding(num_ops, 256)
-        self.last_token_embed = nn.Embedding(vocab_size, 256)
+        hs = args.karel_hidden_size
+
+        self.op_embed = nn.Embedding(num_ops, hs)
+        self.last_token_embed = nn.Embedding(vocab_size, hs)
         self.decoder = nn.LSTM(
-            input_size=512 + 512 +
-            (512 if self.use_code_memory or self.use_code_attn else 0),
-            hidden_size=256,
+            input_size=hs * 2 + hs * 2 +
+            (hs * 2 if self.use_code_memory or self.use_code_attn else 0),
+            hidden_size=hs,
             num_layers=2)
         self.out = nn.Linear(
-            256 + (512 if self.use_code_attn else 0), num_ops, bias=False)
+            hs + (hs * 2 if self.use_code_attn else 0), num_ops, bias=False)
 
         if self.use_code_attn:
-            self.code_attention = SimpleSDPAttention(256, 256 * 2)
+            self.code_attention = SimpleSDPAttention(hs, hs * 2)
 
         # Given the past op, whether to increment source_loc or not.
         # Don't increment for <s>, </s>, insert ops
@@ -1357,9 +1365,9 @@ class LGRLSeqRefineEditDecoder(nn.Module):
 
         if self.use_code_state:
             self.state_h_proj = torch.nn.ModuleList(
-                [nn.Linear(512, 256) for _ in range(2)])
+                [nn.Linear(hs * 2, hs) for _ in range(2)])
             self.state_c_proj = torch.nn.ModuleList(
-                [nn.Linear(512, 256) for _ in range(2)])
+                [nn.Linear(hs * 2, hs) for _ in range(2)])
 
     def prepare_memory(self, io_embed, code_memory, _, ref_code):
         # code_memory:
@@ -1711,7 +1719,7 @@ class LGRLSeqRefineEditDecoder(nn.Module):
                 source_locs,
                 finished,
                 context,
-                *lstm_init(self._cuda, 2, 256, batch_size, pairs_per_example))
+                *lstm_init(self._cuda, 2, self.args.karel_hidden_size, batch_size, pairs_per_example))
 
 
 class LGRLClassifierDecoder(nn.Module):

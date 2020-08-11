@@ -103,6 +103,7 @@ def get_arg_parser(title, mode):
             '--refine-sample-frac', type=float, default=0.1,
             help='Fraction of batches for which we should sample code to add to the refinement data for training.')
 
+        train_group.add_argument('--karel-hidden-size', type=int, default=256, help="the hidden size to use in LSTM, etc. Changing this value from the default only works for a vanilla model (--model_type karel-lgrl-ref --karel-trace-enc none --karel-refine-dec edit)")
         train_group.add_argument('--karel-trace-enc', default='none') #lstm
         train_group.add_argument('--karel-code-enc', default='default')
         train_group.add_argument('--karel-refine-dec', default='edit') #default
@@ -186,6 +187,7 @@ def backport_default_args(args):
         "karel_trace_usage": "memory",
         "karel_code_usage": "memory",
         "karel_refine_dec": "edit",
+        "karel_hidden_size": 256,
     }
     for key, value in backport.items():
         if not hasattr(args, key):
