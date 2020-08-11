@@ -33,6 +33,8 @@ def valid_checkpoints():
                 continue
         elif "123" in short_name:
             continue
+        if "finetuned-agg" in logdir:
+            continue
 
         numbers = get_checkpoint_numbers(logdir)
 
@@ -40,6 +42,10 @@ def valid_checkpoints():
 
     for name in ensemble_names:
         if "old" not in name:
+            continue
+        if name in {"vanilla-#-old-real-nearai32-finetuned-1e-4", "aggregate-with-io-#-old"}:
+            continue
+        if "agg-start" not in name:
             continue
         logdir = "logdirs/" + name + ",*"
         actual_logdirs = [x for number in "123" for x in glob.glob(logdir.replace("#", number))]
@@ -118,7 +124,7 @@ def valid_modes_and_params():
                                 if model == 'nearai':
                                     continue
                             else:
-                                if model == "nearai32":
+                                if model != "nearai":
                                     continue
                             render_extra = '' if extra == '' else ',,start-with-beams'
                             for overfit_model, overfit_cmd in overfit_models_to_use():
@@ -247,7 +253,10 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
-            if mode == "real" and "many-mutations" in logdir:
+            if search_param and ("old-vanilla" in logdir or "bad-vanilla" in logdir or any("logdirs/vanilla-%s" % z in logdir for z in "123")):
+                continue
+
+            if search_param and "many-mutations" in logdir:
                 continue
             if is_overfit_model:
                 continue # given up on these
@@ -262,7 +271,7 @@ def main(args):
                 priority = 100
             if when == 'always':
                 priority -= 1
-            if mode == 'eval':
+            if not search_param:
                 # really fast, might as well do it immediately
                 priority -= 17
             if "overfit=" in command:
