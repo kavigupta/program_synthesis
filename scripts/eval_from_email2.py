@@ -277,9 +277,13 @@ def main(args):
             if "overfit=" in command:
                 continue # given up on these
             if '#' in logdir:
-                # don't deprioritize these too much we want to see the results
-                priority += 20
+                # give up on ensembling
+                continue
+            if search_param and search_param[0] == "greedy":
+                priority += 100
             if search_param and search_param[1] >= 50:
+                priority += 30
+            if search_param and search_param[1] >= 200:
                 priority += 30
             planned.add(output_path)
             by_priority.append((priority, command))
