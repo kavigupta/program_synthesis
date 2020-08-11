@@ -94,7 +94,7 @@ def get_arg_parser(title, mode):
             help='# Number of refinement training samples to keep in the buffer.')
         train_group.add_argument('--refine-min-items', type=int, default=128)
         train_group.add_argument(
-            '--refine-frac', type=float, default=0.5, 
+            '--refine-frac', type=float, default=0.5,
             help='Fraction of time we should sample refinement data for training.')
         train_group.add_argument(
             '--refine-warmup-steps', type=int, default=1000,
@@ -117,6 +117,7 @@ def get_arg_parser(title, mode):
         eval_group.add_argument('--step', type=int, default=None)
         eval_group.add_argument('--refine-iters', type=int, default=1)
         eval_group.add_argument('--eval-train', action='store_true', default=False)
+        eval_group.add_argument('--eval-segment', default='val')
         eval_group.add_argument('--hide-example-info', action='store_true', default=False)
         eval_group.add_argument('--report-path')
         eval_group.add_argument('--eval-final', action='store_true')

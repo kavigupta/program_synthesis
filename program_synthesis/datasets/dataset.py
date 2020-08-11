@@ -603,7 +603,7 @@ def get_karel_eval_dataset(args, model):
 
     dev_data = torch.utils.data.DataLoader(
         KarelTorchDataset(
-            relpath('../data/karel/val{}.pkl'.format(suffix)),
+            relpath('../data/karel/{}{}.pkl'.format(args.eval_segment, suffix)),
             dev_mutator,
             KarelOutputRefExampleMutator.from_path(args.karel_file_ref_val, add_trace, mode, for_eval=True, balancing=args.karel_file_ref_train_balancing, use_all_beams_individually=args.karel_file_ref_train_all_beams)),
         args.batch_size,
