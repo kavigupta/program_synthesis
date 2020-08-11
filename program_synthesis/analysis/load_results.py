@@ -12,8 +12,11 @@ NAME_REGEX = r"((checkpoint|events|args).*)|report-dev-m(?P<d>[^-]*(start-with-b
 def get_exact_match(path):
     exact_match_path = path + ".exact_match.json"
     if not os.path.exists(exact_match_path):
-        with open(path) as f:
-            contents = [json.loads(line) for line in f]
+        try:
+            with open(path) as f:
+                contents = [json.loads(line) for line in f]
+        except json.JSONDecodeError:
+            assert False, path
         num_exact_match = sum(res['example']['code'] == res['code']['code_sequence'] for res in contents[1:])
         result = dict(exact=num_exact_match, total=len(contents[1:]))
         with open(exact_match_path, "w") as f:
