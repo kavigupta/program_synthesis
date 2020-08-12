@@ -209,7 +209,7 @@ def beam_search_(batch_size,
 
             prev_probs, indices = log_probs_flat.topk(actual_beam_size, dim=1)
             if beam_size != actual_beam_size:
-                prev_probs = torch.cat([prev_probs, prev_probs[:, 0].unsqueeze(1).repeat(1, beam_size - actual_beam_size)], dim=1)
+                prev_probs = torch.cat([prev_probs, -10000 + prev_probs[:, 0].unsqueeze(1).repeat(1, beam_size - actual_beam_size)], dim=1)
                 indices = torch.cat([indices, indices[:, 0].unsqueeze(1).repeat(1, beam_size - actual_beam_size)], dim=1)
         
             # prev_tokens: batch_size * beam size
