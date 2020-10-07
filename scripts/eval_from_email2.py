@@ -15,6 +15,8 @@ from collections import Counter
 def valid_checkpoints():
     ensemble_names = set()
     for logdir in glob.glob('logdirs/*', recursive=True) + glob.glob('logdirs-overfit/*', recursive=True):
+        if "327" in logdir:
+            continue
         if "logdirs/baseline_model" in logdir:
             continue
         if "finetuned-rl-1e-5," in logdir:
@@ -25,9 +27,16 @@ def valid_checkpoints():
             continue
         if "aggregate-with-io-real-nearai-finetuned-1e-5," in logdir:
             continue
+        if "many-mutations" in logdir:
+            continue
+        if "old-vanilla" in logdir:
+            continue
+        if "bad-vanilla" in logdir:
+            continue
         short_name = logdir.split("/")[-1].split(",")[0]
         ensemble_regex = "^(vanilla|aggregate-with-io)-[123]($|,|-)"
         if re.match(ensemble_regex, short_name):
+            continue
             ensemble_names.add(re.sub(ensemble_regex, "\\1-#\\2", short_name))
             if short_name not in {"vanilla-%s" % b for b in "1"}:
                 continue
@@ -38,6 +47,7 @@ def valid_checkpoints():
 
         numbers = get_checkpoint_numbers(logdir)
 
+        # if numbers: print(logdir)
         yield from valid_checkpoints_for_logdir(logdir, numbers)
 
     for name in ensemble_names:
@@ -54,6 +64,7 @@ def valid_checkpoints():
         for checkpoints in checkpoints_per[1:]:
             common_checkpoints &= checkpoints
         common_checkpoints = sorted(common_checkpoints)
+        print(name, common_checkpoints, file=sys.stderr)
         yield from valid_checkpoints_for_logdir(logdir, common_checkpoints)
 
 
@@ -110,7 +121,7 @@ def valid_modes_and_params():
             for param in params:
                 yield (mode, param, param), 'always', ''
         elif mode in {'real', 'realtrain'}:
-            for model in 'nearai', 'nearai32', "egnps64":
+            for model in 'nearai', 'nearai32', "egnps64", "egnpsgood":
                 yield (mode, (model, ''), model), 'always', ''
                 for limit in 1, 5, 10, 25, 50, 100:
                     for strategy in 'greedy', 'best_first':
@@ -147,6 +158,7 @@ def overfit_models_to_use():
         #(2000, "overfit-aggregate-with-io-slow-split")
     ]
     yield '', ''
+    return
     for step, model in models:
         [logdir] = glob.glob("logdirs-overfit/{},*".format(model))
         param = 'dataset="karel",step={},model_dir="{}"'.format(step, logdir)
@@ -230,7 +242,10 @@ def main(args):
             model_data = search_param = ''
             if mode == 'real' or mode == 'realtrain':
                 model_data, search_param = param
-                command += '--karel-file-ref-val baseline/{}-val.json'.format(model_data)
+                segment = "test" if model_data == "egnpsgood" else "val"
+                command += '--karel-file-ref-val baseline/{}-{}.json'.format(model_data, segment)
+                if segment == "test":
+                    command += " --eval-segment test "
                 if mode == 'realtrain':
                     # 0.91 to avoid overlap with 0-0.9
                     command += ' --karel-file-ref-train baseline/{}-train-only-val-segment.json:start=0.91'.format(model_data)
@@ -253,6 +268,9 @@ def main(args):
             if args.cpu:
                 command += '--restore-map-to-cpu --no-cuda '
 
+            if model_data != "egnpsgood":
+                continue
+                
             if search_param and ("old-vanilla" in logdir or "bad-vanilla" in logdir or any("logdirs/vanilla-%s" % z in logdir for z in "123")):
                 continue
 
@@ -268,7 +286,7 @@ def main(args):
                 else:
                     priority = 21
             else:
-                priority = 100
+                continue
             if when == 'always':
                 priority -= 1
             if not search_param:

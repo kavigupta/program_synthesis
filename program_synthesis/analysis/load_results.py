@@ -78,7 +78,7 @@ def get_baseline_stats(model, segment="val"):
     return dict(exact=exact, correct=correct, passes_given=passes_given_tests)
 
 def get_for_baseline_model(accuracies, baseline_model):
-    baseline = get_baseline_stats(baseline_model)
+    baseline = get_baseline_stats(baseline_model, 'val' if baseline_model != "egnpsgood" else "test")
 
     acs = accuracies[accuracies.DataLabel.map(lambda x: x.split(",")[0] == baseline_model and ',,overfit=' not in x)].copy()
     acs.Accuracy *= acs.Total

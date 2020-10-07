@@ -33,7 +33,7 @@ K_VALS = 1, 5, 10, 25, 50, 100, 200
 def separate_strategies(df_orig):
     df_orig = by_max_acc(df_orig)
     df = []
-    for data_source in "nearai", "nearai32", "egnps64":
+    for data_source in "nearai", "nearai32", "egnps64", "egnpsgood":
         for model in set(df_orig.Model):
             for s in "G", "B":
                 for k in K_VALS:
