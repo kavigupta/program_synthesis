@@ -61,4 +61,4 @@ def by_k(topline):
     return pd.DataFrame(list(result.values()), columns=columns)
 
 def to_display_name(model):
-    return {"nearai" : "LGRL-GD", "nearai32" : "LGRL", "egnps64" : "EGNPS"}[model]
+    return {"nearai" : "LGRL-GD", "nearai32" : "LGRL", "egnpsgood" : "EGNPS"}[model]
