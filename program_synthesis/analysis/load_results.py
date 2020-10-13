@@ -56,10 +56,10 @@ def table_of_accuracies(label, pbar=lambda x: x):
                 stats = None
         if stats is None or not stats.get('done', stats['total'] >= 2500):
             continue
-        
+
         exact_match = get_exact_match(path)
         assert exact_match['total'] == stats['total'], str((exact_match, stats, path))
-        
+
         data.append([label, checkpoint, stats['correct'] / stats['total'], stats['total'], exact_match['exact'] / stats['total'], data_source, data_label])
     df = pd.DataFrame(
         data, columns=['Model', 'Step', 'Accuracy', 'Total', 'Exact', 'DataSource', 'DataLabel']
@@ -67,9 +67,11 @@ def table_of_accuracies(label, pbar=lambda x: x):
     return df
 
 @lru_cache(None)
-def get_baseline_stats(model, segment="val"):
-    path = "../baseline/{}-{}.json".format(model, segment)
-    dset = dataset.KarelTorchDataset('../data/karel/{}.pkl'.format(segment))
+def get_baseline_stats(model=None, segment="val", path=None, data_folder='../data'):
+    if path is None:
+        assert model is not None
+        path = "../baseline/{}-{}.json".format(model, segment)
+    dset = dataset.KarelTorchDataset('{}/karel/{}.pkl'.format(data_folder, segment))
     with open(path) as f:
         results = json.load(f)
     exact = sum(x['output'] == y.code_sequence for x, y in zip(results, dset))
