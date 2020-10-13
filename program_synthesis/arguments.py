@@ -15,7 +15,7 @@ def get_arg_parser(title, mode):
     parser.add_argument('--dataset_filter_code_length', type=int, default=0)
     parser.add_argument('--dataset_bucket', action='store_true', default=False)
     parser.add_argument('--vocab_min_freq', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=4)#128
+    parser.add_argument('--batch_size', type=int, default=64)#128
     parser.add_argument('--load-sync', action='store_true')
     parser.add_argument('--iterative-search', type=str, default=None)
     parser.add_argument('--iterative-search-start-with-beams', action='store_true', help="start with the beams from the original model")
@@ -34,16 +34,16 @@ def get_arg_parser(title, mode):
     if mode == 'train':
         train_group = parser.add_argument_group('train')
         train_group.add_argument('--save_every_n', type=int, default=1000)
-        train_group.add_argument('--keep_every_n', type=int, default=10000000)
+        train_group.add_argument('--keep_every_n', type=int, default=10000)
         train_group.add_argument('--debug_every_n', type=int, default=1000)#20
-        train_group.add_argument('--eval_every_n', type=int, default=1000)#10000000
+        train_group.add_argument('--eval_every_n', type=int, default=10000000)#10000000
         train_group.add_argument('--eval_n_steps', type=int, default=50)
         train_group.add_argument('--log_interval', type=int, default=100)#20
         train_group.add_argument('--optimizer', type=str, default='sgd') #adam
         train_group.add_argument('--lr', type=float, default=0.1) #.001
-        train_group.add_argument('--lr_decay_steps', type=int, default=None) #100000
-        train_group.add_argument('--lr_decay_rate', type=float, default = 0.99) #0.5
-        train_group.add_argument('--gradient-clip', type=float)
+        train_group.add_argument('--lr_decay_steps', type=int, default=100000)
+        train_group.add_argument('--lr_decay_rate', type=float, default = 0.5)
+        train_group.add_argument('--gradient-clip', type=float, default=1)
         train_group.add_argument('--n_warmup_steps', type=int, default=4000)
         train_group.add_argument('--num_epochs', type=int, default=10)
         train_group.add_argument('--num_units', type=int, default=100)

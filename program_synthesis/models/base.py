@@ -122,7 +122,7 @@ class BaseModel(object):
         self.optimizer.zero_grad()
         loss = self.compute_loss(batch)
         loss.backward()
-        if self.args.gradient_clip is not None:
+        if self.args.gradient_clip is not None and self.args.gradient_clip > 0:
             nn.utils.clip_grad_norm(self.model.parameters(),
                                     self.args.gradient_clip)
         self.optimizer.step()
