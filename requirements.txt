@@ -14,6 +14,7 @@ future==0.18.2
 #futures==3.2.0
 tensorflow==1.15.2
 torch==1.2.0
+pylru==1.2.0
 
 python-Levenshtein==0.12.0
 GPUtil==1.4.0
